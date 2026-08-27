@@ -82,4 +82,18 @@ describe("regras de validação do fluxo BPMN", () => {
     expect(xml).toContain("<bpmndi:BPMNEdge");
     expect(xml).toContain("<di:waypoint");
   });
+
+  it("exporta os elementos avançados da legenda BPMN", () => {
+    const model = createDefaultFlowModel();
+    model.nodes.push(
+      { id: "decisao", laneId: "mpsc-admin-superior", label: "Deliberar sobre escalonamento", nodeType: "decision", x: 90, y: 0, responsible: "Administração Superior", notes: "", gatewayCondition: "", level: null, requiresValidation: false },
+      { id: "paralelo", laneId: "mpsc-cisi", label: "Providências simultâneas", nodeType: "parallelGateway", x: 320, y: 0, responsible: "CISI", notes: "", gatewayCondition: "", level: null, requiresValidation: false },
+      { id: "nota", laneId: "mpsc-cisi", label: "Validar canal de acionamento", nodeType: "annotation", x: 560, y: 0, responsible: "CISI", notes: "", gatewayCondition: "", level: null, requiresValidation: true },
+    );
+    model.edges.push({ id: "associacao", sourceId: "paralelo", targetId: "nota", type: "association", label: "Observação" });
+    const xml = buildBpmnXml(model);
+    expect(xml).toContain('<bpmn:parallelGateway id="paralelo"');
+    expect(xml).toContain('<bpmn:textAnnotation id="nota">');
+    expect(xml).toContain('<bpmn:association id="associacao"');
+  });
 });

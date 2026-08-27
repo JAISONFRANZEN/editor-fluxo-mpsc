@@ -23,3 +23,6 @@
 - [x] Criar teste para desfazer sem violar o bloqueio da Administração Superior.
 - [x] Implementar exportação do fluxo atual em arquivo BPMN 2.0 com Pools, baias, elementos e conectores.
 - [x] Adicionar botão destacado Baixar fluxo e testar a estrutura BPMN exportada.
+- [x] Destacar o registro de versões após importação ou edição e facilitar a restauração de estados anteriores.
+- [x] Acrescentar uma legenda BPMN 2.0 completa ao canvas e às exportações de apresentação.
+- [x] Verificar a exportação .bpmn diretamente a partir do fluxo revisado e testar a legibilidade da legenda.

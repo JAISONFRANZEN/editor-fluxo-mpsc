@@ -1,6 +1,6 @@
-export type FlowNodeType = "start" | "end" | "task" | "gateway" | "data";
+export type FlowNodeType = "start" | "end" | "task" | "decision" | "gateway" | "parallelGateway" | "data" | "annotation";
 export type FlowLevel = "N0" | "N1" | "N2" | "N3" | null;
-export type FlowEdgeType = "sequence" | "message";
+export type FlowEdgeType = "sequence" | "message" | "association";
 
 export type FlowPool = {
   id: string;
