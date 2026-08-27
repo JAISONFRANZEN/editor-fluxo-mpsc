@@ -1,4 +1,4 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
+import { int, json, mysqlEnum, mysqlTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/mysql-core";
 
 /**
  * Core user table backing auth flow.
@@ -25,4 +25,39 @@ export const users = mysqlTable("users", {
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 
-// TODO: Add your tables here
+export const protocolFlows = mysqlTable("protocolFlows", {
+  id: int("id").autoincrement().primaryKey(),
+  ownerId: int("ownerId").notNull().references(() => users.id),
+  title: varchar("title", { length: 255 }).notNull(),
+  status: mysqlEnum("status", ["draft", "under_review", "approved", "archived"]).notNull().default("draft"),
+  currentVersion: int("currentVersion").notNull().default(1),
+  modelJson: json("modelJson").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export const flowVersions = mysqlTable("flowVersions", {
+  id: int("id").autoincrement().primaryKey(),
+  flowId: int("flowId").notNull().references(() => protocolFlows.id),
+  versionNumber: int("versionNumber").notNull(),
+  status: mysqlEnum("status", ["draft", "under_review", "approved", "archived"]).notNull().default("draft"),
+  changeSummary: text("changeSummary").notNull(),
+  snapshot: json("snapshot").notNull(),
+  authorId: int("authorId").notNull().references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [uniqueIndex("flow_versions_flow_version_idx").on(table.flowId, table.versionNumber)]);
+
+export const flowComments = mysqlTable("flowComments", {
+  id: int("id").autoincrement().primaryKey(),
+  flowId: int("flowId").notNull().references(() => protocolFlows.id),
+  elementId: varchar("elementId", { length: 128 }),
+  content: text("content").notNull(),
+  status: mysqlEnum("status", ["open", "resolved"]).notNull().default("open"),
+  authorId: int("authorId").notNull().references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  resolvedAt: timestamp("resolvedAt"),
+});
+
+export type ProtocolFlow = typeof protocolFlows.$inferSelect;
+export type FlowVersion = typeof flowVersions.$inferSelect;
+export type FlowComment = typeof flowComments.$inferSelect;
