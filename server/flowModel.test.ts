@@ -3,11 +3,12 @@ import { readFileSync } from "node:fs";
 import { ADMINISTRATION_LANE_ID, createDefaultFlowModel, validateFlowModel } from "../shared/flowModel";
 import { compareFlowModels } from "../shared/flowDiff";
 import { buildBpmnXml } from "../shared/bpmnExport";
-import { calculateCanvasDropX } from "../shared/canvasGeometry";
-import { popFlowHistory, pushFlowHistory } from "../shared/flowHistory";
+import { calculateCanvasDropX, snapCanvasX } from "../shared/canvasGeometry";
+import { popFlowHistory, pushFlowHistory, redoFlowChange, undoFlowChange } from "../shared/flowHistory";
 import { importMarkdownToFlow } from "../shared/markdownImporter";
 import { sanitizeAttachmentFilename, validateCommentAttachment } from "../shared/attachmentPolicy";
 import { canSaveStatus, rolePermissions } from "../shared/flowAccess";
+import { buildExportSvg } from "../client/src/components/FlowEditor";
 
 describe("regras de validação do fluxo BPMN", () => {
   it("aceita o fluxo-base com a Administração Superior na primeira baia", () => {
@@ -65,6 +66,17 @@ describe("regras de validação do fluxo BPMN", () => {
     expect(result?.model.lanes[0]?.id).toBe(ADMINISTRATION_LANE_ID);
   });
 
+  it("refaz uma alteração desfeita sem alterar a hierarquia institucional", () => {
+    const original = createDefaultFlowModel();
+    const edited = createDefaultFlowModel();
+    edited.nodes[0].label = "Identifica alerta climático";
+    const undone = undoFlowChange(edited, pushFlowHistory([], original), []);
+    const redone = undone ? redoFlowChange(undone.model, undone.undoStack, undone.redoStack) : null;
+    expect(undone?.model.nodes[0]?.label).toBe("Identifica risco, alerta relevante, emergência ou crise");
+    expect(redone?.model.nodes[0]?.label).toBe("Identifica alerta climático");
+    expect(redone?.model.lanes[0]?.id).toBe(ADMINISTRATION_LANE_ID);
+  });
+
   it("interpreta o Markdown institucional fornecido como visão de trabalho editável", () => {
     const source = readFileSync("/home/ubuntu/upload/PromptdeComando—ImagemA1doFluxoBásicodeAcionamento.md", "utf8");
     const imported = importMarkdownToFlow(source, "PromptdeComando—ImagemA1doFluxoBásicodeAcionamento.md");
@@ -84,6 +96,14 @@ describe("regras de validação do fluxo BPMN", () => {
     expect(xml).toContain(`<bpmn:lane id="${ADMINISTRATION_LANE_ID}"`);
     expect(xml).toContain("<bpmndi:BPMNEdge");
     expect(xml).toContain("<di:waypoint");
+  });
+
+  it("inclui os marcos de fase na exportação visual, sem incluí-los no BPMN XML", () => {
+    const model = createDefaultFlowModel();
+    const svg = buildExportSvg(model);
+    expect(svg).toContain("PREVENÇÃO E PREPARAÇÃO");
+    expect(svg).toContain("RESPOSTA E COORDENAÇÃO");
+    expect(buildBpmnXml(model)).not.toContain("PREVENÇÃO E PREPARAÇÃO");
   });
 
   it("exporta os elementos avançados da legenda BPMN", () => {
@@ -117,6 +137,13 @@ describe("regras de validação do fluxo BPMN", () => {
 
   it("impede a criação de elemento antes da margem mínima do canvas", () => {
     expect(calculateCanvasDropX({ clientX: 10, canvasLeft: 110, scrollLeft: 0, zoomPercent: 100 })).toBe(30);
+  });
+
+  it("aplica encaixe opcional de 20 px à posição de elementos", () => {
+    expect(snapCanvasX(511)).toBe(520);
+    expect(snapCanvasX(505)).toBe(500);
+    expect(snapCanvasX(14)).toBe(30);
+    expect(snapCanvasX(511, false)).toBe(511);
   });
 
   it("aplica as permissões institucionais de revisor e aprovador", () => {

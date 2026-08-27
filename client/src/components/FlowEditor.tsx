@@ -19,9 +19,11 @@ import {
   Minus,
   Paperclip,
   Plus,
+  Redo2,
   Save,
   Settings2,
   ShieldCheck,
+  Sparkles,
   Undo2,
   Upload,
   UserRoundCog,
@@ -29,6 +31,7 @@ import {
   X,
   ZoomIn,
   ZoomOut,
+  Grid3X3,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -49,9 +52,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { trpc } from "@/lib/trpc";
 import { buildBpmnXml } from "@shared/bpmnExport";
-import { calculateCanvasDropX } from "@shared/canvasGeometry";
+import { calculateCanvasDropX, snapCanvasX } from "@shared/canvasGeometry";
 import { compareFlowModels } from "../../../shared/flowDiff";
-import { popFlowHistory, pushFlowHistory } from "../../../shared/flowHistory";
+import { pushFlowHistory, redoFlowChange, undoFlowChange } from "../../../shared/flowHistory";
 import { importMarkdownToFlow, type MarkdownImportResult } from "../../../shared/markdownImporter";
 import { roleLabels } from "../../../shared/flowAccess";
 import {
@@ -84,7 +87,7 @@ const nodeTypeLabels: Record<FlowNodeType, string> = {
   task: "Tarefa",
   decision: "Tarefa de decisão / deliberação",
   subprocess: "Subprocesso",
-  gateway: "Gateway",
+  gateway: "Gateway exclusivo (XOR)",
   parallelGateway: "Gateway paralelo (AND)",
   inclusiveGateway: "Gateway inclusivo (OR)",
   eventGateway: "Gateway baseado em eventos",
@@ -92,6 +95,9 @@ const nodeTypeLabels: Record<FlowNodeType, string> = {
   dataStore: "Repositório de dados",
   annotation: "Anotação / observação",
 };
+
+const essentialNodeTypes: FlowNodeType[] = ["start", "end", "task", "decision", "gateway", "parallelGateway", "data", "annotation"];
+const extendedNodeTypes = Object.keys(nodeTypeLabels) as FlowNodeType[];
 
 function downloadFile(filename: string, content: string, type: string) {
   const blob = new Blob([content], { type });
@@ -140,7 +146,7 @@ function buildCompleteLegendSvg(legendY: number) {
   return legendEntries.map(([kind, label], index) => { const column = index % 2; const row = Math.floor(index / 2); const x = 60 + column * 560; const y = legendY + 52 + row * 34; return `<g transform='translate(${x},${y})'>${visual[kind]}<text x='46' y='5' font-family='Inter, Arial' font-size='14' fill='#334155'>${label}</text></g>`; }).join("");
 }
 
-function buildExportSvg(model: FlowModel) {
+export function buildExportSvg(model: FlowModel) {
   const lanes = sortedLanes(model);
   const width = Math.max(3300, ...model.nodes.map(node => node.x + NODE_WIDTH + 90));
   const height = lanes.length * LANE_HEIGHT + 420;
@@ -184,8 +190,9 @@ function buildExportSvg(model: FlowModel) {
     const symbol = node.nodeType === "gateway" ? `<text x='${node.x + 95}' y='${y + 34}' font-family='Inter, Arial' font-size='17' fill='#8A5B00' text-anchor='middle'>×</text>` : node.nodeType === "parallelGateway" ? `<text x='${node.x + 95}' y='${y + 34}' font-family='Inter, Arial' font-size='18' fill='#3C8A38' text-anchor='middle'>+</text>` : node.nodeType === "inclusiveGateway" ? `<circle cx='${node.x + 95}' cy='${y + 29}' r='13' fill='none' stroke='#8A5B00' stroke-width='2'/>` : node.nodeType === "eventGateway" ? `<circle cx='${node.x + 95}' cy='${y + 29}' r='14' fill='none' stroke='#8A5B00' stroke-width='2'/><circle cx='${node.x + 95}' cy='${y + 29}' r='8' fill='none' stroke='#8A5B00' stroke-width='2'/>` : node.nodeType === "subprocess" ? `<rect x='${node.x + 86}' y='${y + 43}' width='18' height='11' fill='white' stroke='#4A90E2'/><text x='${node.x + 95}' y='${y + 53}' font-family='Inter, Arial' font-size='12' fill='#1F4788' text-anchor='middle'>+</text>` : node.nodeType === "intermediate" ? `<ellipse cx='${node.x + 95}' cy='${y + 29}' rx='79' ry='21' fill='none' stroke='#65A30D' stroke-width='1.5'/>` : "";
     return `${shape}${symbol}${marker}<text x='${node.x + 95}' y='${textY + (symbol ? 13 : 0)}' font-family='Inter, Arial' font-size='12' fill='#333333' text-anchor='middle'>${escapeXml(node.label.replace("[A VALIDAR]", "").slice(0, 58))}</text>`;
   }).join("");
+  const milestonesSvg = (model.milestones ?? []).map(milestone => `<g><rect x='${milestone.x}' y='19' width='${milestone.width}' height='24' rx='5' fill='#FFFFFF' fill-opacity='0.14' stroke='#FFFFFF' stroke-opacity='0.36'/><text x='${milestone.x + milestone.width / 2}' y='35' font-family='Inter, Arial' font-size='10' font-weight='700' letter-spacing='1.1' fill='#FFFFFF' text-anchor='middle'>${escapeXml(milestone.label.toUpperCase())}</text></g>`).join("");
   const legendY = lanes.length * LANE_HEIGHT + 85;
-  return `<svg xmlns='http://www.w3.org/2000/svg' width='${width}' height='${height}' viewBox='0 0 ${width} ${height}'><defs><marker id='arrow' markerWidth='9' markerHeight='9' refX='7' refY='4.5' orient='auto'><path d='M0,0 L0,9 L8,4.5 z' fill='#111827'/></marker><marker id='open-arrow' markerWidth='10' markerHeight='10' refX='8' refY='5' orient='auto'><path d='M1,1 L8,5 L1,9' fill='none' stroke='#111827' stroke-width='1.5'/></marker></defs><rect width='100%' height='100%' fill='#F8F9FA'/><rect x='20' y='15' width='${width - 40}' height='32' fill='#1F4788'/><text x='38' y='37' font-family='Inter, Arial' font-size='18' font-weight='700' fill='white'>Fluxo Básico de Acionamento — MPSC</text>${lanesSvg}${edges}${nodes}<rect x='36' y='${legendY}' width='1160' height='310' rx='12' fill='#FFFFFF' stroke='#CBD5E1'/><text x='60' y='${legendY + 30}' font-family='Inter, Arial' font-size='17' font-weight='700' fill='#1F4788'>LEGENDA — BPMN 2.0</text>${buildCompleteLegendSvg(legendY)}</svg>`;
+  return `<svg xmlns='http://www.w3.org/2000/svg' width='${width}' height='${height}' viewBox='0 0 ${width} ${height}'><defs><marker id='arrow' markerWidth='9' markerHeight='9' refX='7' refY='4.5' orient='auto'><path d='M0,0 L0,9 L8,4.5 z' fill='#111827'/></marker><marker id='open-arrow' markerWidth='10' markerHeight='10' refX='8' refY='5' orient='auto'><path d='M1,1 L8,5 L1,9' fill='none' stroke='#111827' stroke-width='1.5'/></marker></defs><rect width='100%' height='100%' fill='#F8F9FA'/><rect x='20' y='15' width='${width - 40}' height='32' fill='#1F4788'/><text x='38' y='37' font-family='Inter, Arial' font-size='18' font-weight='700' fill='white'>Fluxo Básico de Acionamento — MPSC</text>${milestonesSvg}${lanesSvg}${edges}${nodes}<rect x='36' y='${legendY}' width='1160' height='310' rx='12' fill='#FFFFFF' stroke='#CBD5E1'/><text x='60' y='${legendY + 30}' font-family='Inter, Arial' font-size='17' font-weight='700' fill='#1F4788'>LEGENDA — BPMN 2.0</text>${buildCompleteLegendSvg(legendY)}</svg>`;
 }
 
 function sortedLanes(model: FlowModel) {
@@ -231,9 +238,13 @@ export default function FlowEditor() {
   const [newLanePool, setNewLanePool] = useState<"mpsc" | "externo">("mpsc");
   const [helpOpen, setHelpOpen] = useState(false);
   const [undoStack, setUndoStack] = useState<FlowModel[]>([]);
+  const [redoStack, setRedoStack] = useState<FlowModel[]>([]);
   const [pendingImport, setPendingImport] = useState<MarkdownImportResult | null>(null);
   const [isReadingMarkdown, setIsReadingMarkdown] = useState(false);
   const [zoom, setZoom] = useState(100);
+  const [paletteMode, setPaletteMode] = useState<"essential" | "extended">("essential");
+  const [showGrid, setShowGrid] = useState(true);
+  const [snapToGrid, setSnapToGrid] = useState(true);
   const [commentAttachments, setCommentAttachments] = useState<File[]>([]);
   const [isPreparingComment, setIsPreparingComment] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -263,6 +274,7 @@ export default function FlowEditor() {
     if (!model) return;
     if (priorModelRef.current && !skipUndoRecordRef.current) {
       setUndoStack(history => pushFlowHistory(history, priorModelRef.current as FlowModel));
+      setRedoStack([]);
     }
     priorModelRef.current = JSON.parse(JSON.stringify(model)) as FlowModel;
     skipUndoRecordRef.current = false;
@@ -347,15 +359,42 @@ export default function FlowEditor() {
   };
 
   const undoLastChange = () => {
-    const result = popFlowHistory(undoStack);
+    const result = undoFlowChange(model, undoStack, redoStack);
     if (!result) {
       toast.message("Não há alteração local para desfazer.");
       return;
     }
     skipUndoRecordRef.current = true;
-    setUndoStack(result.history);
+    setRedoStack(result.redoStack);
+    setUndoStack(result.undoStack);
     setModel(result.model);
     toast.success("Alteração local desfeita.");
+  };
+
+  const redoLastChange = () => {
+    const result = redoFlowChange(model, undoStack, redoStack);
+    if (!result) {
+      toast.message("Não há alteração local para refazer.");
+      return;
+    }
+    skipUndoRecordRef.current = true;
+    setUndoStack(result.undoStack);
+    setRedoStack(result.redoStack);
+    setModel(result.model);
+    toast.success("Alteração local refeita.");
+  };
+
+  const snapX = (value: number) => snapCanvasX(value, snapToGrid);
+
+  const autoArrange = () => {
+    if (!model || !canEdit) return;
+    const nodeIndexByLane = new Map(model.lanes.map(lane => [lane.id, 0]));
+    setModel({ ...model, nodes: model.nodes.map(node => {
+      const index = nodeIndexByLane.get(node.laneId) ?? 0;
+      nodeIndexByLane.set(node.laneId, index + 1);
+      return { ...node, x: 350 + index * 230 };
+    }) });
+    toast.success("Elementos organizados por baia. Revise as conexões antes de registrar a versão.");
   };
 
   const readMarkdownFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -400,10 +439,14 @@ export default function FlowEditor() {
         event.preventDefault();
         undoLastChange();
       }
+      if ((((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") || ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "z")) && !typing) {
+        event.preventDefault();
+        redoLastChange();
+      }
     };
     window.addEventListener("keydown", handleKeyboardUndo);
     return () => window.removeEventListener("keydown", handleKeyboardUndo);
-  }, [undoStack]);
+  }, [undoStack, redoStack, model]);
 
   const createNodeAt = (nodeType: FlowNodeType, laneId: string, x: number) => {
     if (!model || !canEdit) return;
@@ -412,7 +455,7 @@ export default function FlowEditor() {
       laneId,
       label: nodeType === "gateway" ? "Nova decisão exclusiva?" : nodeType === "parallelGateway" ? "Ativar ações em paralelo" : nodeType === "inclusiveGateway" ? "Quais condições se aplicam?" : nodeType === "eventGateway" ? "Qual evento ocorrerá primeiro?" : nodeType === "decision" ? "Nova deliberação [A VALIDAR]" : nodeType === "subprocess" ? "Novo subprocesso [A VALIDAR]" : nodeType === "annotation" ? "Nova observação [A VALIDAR]" : nodeType === "start" ? "Novo início" : nodeType === "intermediate" ? "Novo evento intermediário" : nodeType === "end" ? "Novo encerramento" : nodeType === "data" ? "Novo objeto de dados [A VALIDAR]" : nodeType === "dataStore" ? "Novo repositório de dados [A VALIDAR]" : "Nova ação [A VALIDAR]",
       nodeType,
-      x: Math.max(30, x),
+      x: snapX(x),
       y: 0,
       responsible: selectedNode?.responsible ?? "[A VALIDAR]",
       notes: "",
@@ -430,14 +473,14 @@ export default function FlowEditor() {
     event.preventDefault();
     if (!canEdit || !canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
-    const x = calculateCanvasDropX({ clientX: event.clientX, canvasLeft: rect.left, scrollLeft: canvasRef.current.parentElement?.scrollLeft ?? 0, zoomPercent: zoom, nodeWidth: NODE_WIDTH });
+    const x = snapX(calculateCanvasDropX({ clientX: event.clientX, canvasLeft: rect.left, scrollLeft: canvasRef.current.parentElement?.scrollLeft ?? 0, zoomPercent: zoom, nodeWidth: NODE_WIDTH }));
     const paletteType = event.dataTransfer.getData("application/x-bpmn-node-type") as FlowNodeType;
     if (paletteType && Object.prototype.hasOwnProperty.call(nodeTypeLabels, paletteType)) {
       createNodeAt(paletteType, laneId, x);
       return;
     }
     if (!draggedNodeId) return;
-    setModel(current => current ? { ...current, nodes: current.nodes.map(node => node.id === draggedNodeId ? { ...node, laneId, x } : node) } : current);
+    setModel(current => current ? { ...current, nodes: current.nodes.map(node => node.id === draggedNodeId ? { ...node, laneId, x: snapX(x) } : node) } : current);
     setDraggedNodeId(null);
   };
 
@@ -593,6 +636,7 @@ export default function FlowEditor() {
             <input ref={fileInputRef} type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" className="hidden" onChange={readMarkdownFile} />
             <Button variant="outline" onClick={() => fileInputRef.current?.click()} disabled={isReadingMarkdown}><Upload className="mr-2 h-4 w-4" />{isReadingMarkdown ? "Lendo MD…" : "Importar MD"}</Button>
             <Button variant="outline" onClick={undoLastChange} disabled={undoStack.length === 0} title="Desfazer alteração local (Ctrl+Z)"><Undo2 className="mr-2 h-4 w-4" />Desfazer</Button>
+            <Button variant="outline" onClick={redoLastChange} disabled={redoStack.length === 0} title="Refazer alteração local (Ctrl+Y ou Ctrl+Shift+Z)"><Redo2 className="mr-2 h-4 w-4" />Refazer</Button>
             <Dialog open={helpOpen} onOpenChange={setHelpOpen}><DialogTrigger asChild><Button variant="outline"><CircleHelp className="mr-2 h-4 w-4" />Como usar</Button></DialogTrigger><DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>Orientação de uso do editor BPMN</DialogTitle><DialogDescription>Este espaço é uma minuta de modelagem e revisão. A versão institucional definitiva deve ser validada pela CISI e modelada no Bizagi.</DialogDescription></DialogHeader><div className="space-y-4 text-sm leading-relaxed text-slate-700"><div><b>1. Estruture o fluxo.</b> Adicione ações, decisões, eventos e objetos de dados. Arraste uma ação para alterar sua baia ou sua ordem horizontal. Arraste os rótulos das baias para reordená-las.</div><div><b>2. Preserve a governança.</b> A Administração Superior permanece bloqueada na primeira baia do Pool MPSC. Para interlocução externa, use o Pool de órgãos externos e conexões do tipo “fluxo de mensagem”.</div><div><b>3. Revise propriedades.</b> Selecione uma ação ou ligação no canvas e ajuste rótulo, responsável, observações, condição e nível N0–N3. Mantenha a marcação <code>[A VALIDAR]</code> em todo dado ainda não confirmado.</div><div><b>4. Resolva alertas.</b> O painel “Revisão” aponta fluxos inválidos entre Pools, gateways sem rótulo de saída, ações desconectadas e conflitos elementares de competência.</div><div><b>5. Registre decisão e exporte.</b> Adicione comentários, registre uma versão com resumo e status, compare com versões anteriores ou restaure um rascunho. Exporte SVG, especiﬁcação JSON ou imprima em A1/PDF.</div></div></DialogContent></Dialog>
             <Button variant="outline" onClick={() => downloadFile("fluxo-mpsc-especificacao.json", JSON.stringify({ title: flowQuery.data?.title, status, model, exportedAt: new Date().toISOString() }, null, 2), "application/json")}><FileJson className="mr-2 h-4 w-4" />Especificação</Button>
             <Button className="bg-[#1F4788] hover:bg-[#16396f]" onClick={downloadBpmn}><Download className="mr-2 h-4 w-4" />Baixar fluxo</Button>
@@ -607,8 +651,9 @@ export default function FlowEditor() {
       <main className="mx-auto grid max-w-[1800px] grid-cols-1 gap-4 p-4 xl:grid-cols-[250px_minmax(0,1fr)_350px]">
         <aside className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm xl:sticky xl:top-4 xl:h-[calc(100vh-3rem)]">
           <div className="mb-4 flex items-center gap-2"><div className="rounded-md bg-blue-50 p-2 text-[#1F4788]"><Plus className="h-4 w-4" /></div><div><h2 className="font-semibold">Elementos BPMN</h2><p className="text-xs text-slate-500">Adicionar ao rascunho</p></div></div>
+          <div className="mb-3 grid grid-cols-2 rounded-lg border border-slate-200 bg-slate-50 p-1 text-xs"><button onClick={() => setPaletteMode("essential")} className={`rounded-md px-2 py-1.5 font-semibold ${paletteMode === "essential" ? "bg-white text-[#1F4788] shadow-sm" : "text-slate-500"}`}>Essencial</button><button onClick={() => setPaletteMode("extended")} className={`rounded-md px-2 py-1.5 font-semibold ${paletteMode === "extended" ? "bg-white text-[#1F4788] shadow-sm" : "text-slate-500"}`}>Estendido</button></div>
           <div className="space-y-2">
-            {(["start", "end", "task", "decision", "gateway", "parallelGateway", "data", "annotation"] as FlowNodeType[]).map(type => <Button key={type} variant="outline" draggable={canEdit} onDragStart={event => { event.dataTransfer.setData("application/x-bpmn-node-type", type); event.dataTransfer.effectAllowed = "copy"; }} className="w-full cursor-grab justify-start border-slate-200 active:cursor-grabbing" onClick={() => addNode(type)} disabled={!canEdit}>{type === "gateway" || type === "parallelGateway" ? <GitBranch className={`mr-2 h-4 w-4 ${type === "gateway" ? "text-amber-600" : "text-yellow-700"}`} /> : type === "data" || type === "annotation" ? <FileText className={`mr-2 h-4 w-4 ${type === "annotation" ? "text-amber-700" : "text-slate-600"}`} /> : type === "start" || type === "end" ? <CircleDot className={`mr-2 h-4 w-4 ${type === "end" ? "text-red-600" : "text-lime-600"}`} /> : <Workflow className={`mr-2 h-4 w-4 ${type === "decision" ? "text-violet-600" : "text-[#4A90E2]"}`} />}{nodeTypeLabels[type]}</Button>)}
+            {(paletteMode === "essential" ? essentialNodeTypes : extendedNodeTypes).map(type => <Button key={type} variant="outline" draggable={canEdit} onDragStart={event => { event.dataTransfer.setData("application/x-bpmn-node-type", type); event.dataTransfer.effectAllowed = "copy"; }} className="w-full cursor-grab justify-start border-slate-200 active:cursor-grabbing" onClick={() => addNode(type)} disabled={!canEdit}>{["gateway", "parallelGateway", "inclusiveGateway", "eventGateway"].includes(type) ? <GitBranch className={`mr-2 h-4 w-4 ${type === "gateway" ? "text-amber-600" : "text-yellow-700"}`} /> : ["data", "dataStore", "annotation"].includes(type) ? <FileText className={`mr-2 h-4 w-4 ${type === "annotation" ? "text-amber-700" : "text-slate-600"}`} /> : ["start", "intermediate", "end"].includes(type) ? <CircleDot className={`mr-2 h-4 w-4 ${type === "end" ? "text-red-600" : "text-lime-600"}`} /> : <Workflow className={`mr-2 h-4 w-4 ${type === "decision" ? "text-violet-600" : "text-[#4A90E2]"}`} />}{nodeTypeLabels[type]}</Button>)}
           </div>
           <p className="mt-3 rounded-lg border border-blue-100 bg-blue-50 p-2 text-[11px] leading-relaxed text-[#1F4788]"><strong>Inserção direta.</strong> Arraste um elemento desta paleta até a posição desejada no canvas. Ao soltar, as propriedades serão abertas para preenchimento.</p>
           <Separator className="my-5" />
@@ -627,13 +672,14 @@ export default function FlowEditor() {
         <section className="min-w-0 rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3 md:flex-row md:items-center md:justify-between">
             <div><h2 className="font-semibold text-slate-900">Canvas de revisão</h2><p className="text-sm text-slate-500">Arraste elementos entre baias ou ao longo da faixa. Arraste novos elementos da paleta para inseri-los no ponto desejado.</p></div>
-            <div className="flex flex-wrap items-center justify-end gap-3"><div className="flex items-center gap-2 text-xs text-slate-500"><span className="inline-flex h-2 w-2 rounded-full bg-[#4A90E2]" />fluxo de sequência <span className="ml-2 inline-flex h-2 w-2 rounded-full bg-slate-500" />mensagem externa</div><div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1" aria-label="Régua de zoom do canvas"><Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setZoom(current => Math.max(50, current - 10))} disabled={zoom <= 50} title="Diminuir zoom"><ZoomOut className="h-4 w-4" /></Button><span className="min-w-12 text-center text-xs font-semibold tabular-nums text-slate-700">{zoom}%</span><Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setZoom(current => Math.min(150, current + 10))} disabled={zoom >= 150} title="Aumentar zoom"><ZoomIn className="h-4 w-4" /></Button><Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setZoom(100)} title="Ajustar para 100%"><Maximize2 className="h-4 w-4" /></Button></div></div>
+            <div className="flex flex-wrap items-center justify-end gap-3"><div className="flex items-center gap-2 text-xs text-slate-500"><span className="inline-flex h-2 w-2 rounded-full bg-[#4A90E2]" />fluxo de sequência <span className="ml-2 inline-flex h-2 w-2 rounded-full bg-slate-500" />mensagem externa</div><Button size="sm" variant="outline" onClick={() => setShowGrid(current => !current)}><Grid3X3 className="mr-1.5 h-3.5 w-3.5" />{showGrid ? "Ocultar grade" : "Exibir grade"}</Button><Button size="sm" variant="outline" onClick={() => setSnapToGrid(current => !current)}><Sparkles className="mr-1.5 h-3.5 w-3.5" />{snapToGrid ? "Encaixe ativo" : "Encaixe livre"}</Button><Button size="sm" variant="outline" onClick={autoArrange} disabled={!canEdit}><Maximize2 className="mr-1.5 h-3.5 w-3.5" />Organizar</Button><div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1" aria-label="Régua de zoom do canvas"><Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setZoom(current => Math.max(50, current - 10))} disabled={zoom <= 50} title="Diminuir zoom"><ZoomOut className="h-4 w-4" /></Button><span className="min-w-12 text-center text-xs font-semibold tabular-nums text-slate-700">{zoom}%</span><Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setZoom(current => Math.min(150, current + 10))} disabled={zoom >= 150} title="Aumentar zoom"><ZoomIn className="h-4 w-4" /></Button><Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setZoom(100)} title="Ajustar para 100%"><Maximize2 className="h-4 w-4" /></Button></div></div>
           </div>
           <ScrollArea className="h-[calc(100vh-15rem)] min-h-[650px]">
             <div className="p-5" style={{ minWidth: 3340 * zoomFactor }}>
               <div style={{ width: 3300 * zoomFactor, height: canvasHeight * zoomFactor }}>
-              <div ref={canvasRef} className="relative overflow-hidden rounded-xl border border-slate-300 bg-[#F8F9FA] shadow-inner" style={{ width: 3300, height: canvasHeight, transform: `scale(${zoomFactor})`, transformOrigin: "top left" }}>
+              <div ref={canvasRef} className="relative overflow-hidden rounded-xl border border-slate-300 bg-[#F8F9FA] shadow-inner" style={{ width: 3300, height: canvasHeight, transform: `scale(${zoomFactor})`, transformOrigin: "top left", backgroundImage: showGrid ? "radial-gradient(#CBD5E1 0.75px, transparent 0.75px)" : undefined, backgroundSize: "20px 20px" }}>
                 <div className="absolute inset-x-0 top-0 flex h-14 items-center bg-[#1F4788] px-5 text-sm font-semibold tracking-wide text-white">POOL 1 — MPSC | GOVERNANÇA E RESPOSTA INSTITUCIONAL <span className="ml-4 border-l border-white/30 pl-4 text-xs font-medium text-blue-100">Rascunho auditável · Fluxo de nível Promotoria</span></div>
+                {(model.milestones ?? []).map(milestone => <div key={milestone.id} className="pointer-events-none absolute top-1 z-10 rounded border border-white/30 bg-white/10 px-3 py-1 text-[10px] font-bold tracking-[0.12em] text-white" style={{ left: milestone.x, width: milestone.width }}>{milestone.label}</div>)}
                 <svg className="pointer-events-none absolute inset-0 z-[25] h-full w-full" width="3300" height={lanes.length * LANE_HEIGHT + 56} aria-label="Conectores editáveis do fluxo">
                   <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L0,8 L8,4 Z" fill="#111827" /></marker><marker id="open-arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M1,1 L8,5 L1,9" fill="none" stroke="#111827" strokeWidth="1.5" /></marker></defs>
                   {model.edges.map(edge => {

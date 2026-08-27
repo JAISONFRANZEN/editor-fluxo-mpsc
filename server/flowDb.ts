@@ -1,10 +1,10 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { flowCommentAttachments, flowComments, flowVersions, protocolFlows, users } from "../drizzle/schema";
 import type { FlowModel } from "../shared/flowModel";
 import { canSaveStatus, rolePermissions, type FlowStatus, type InstitutionalRole } from "../shared/flowAccess";
 import { getDb } from "./db";
 import { storagePut } from "./storage";
-import { sanitizeAttachmentFilename, validateCommentAttachment } from "../shared/attachmentPolicy";
+import { MAX_COMMENT_ATTACHMENT_BYTES, MAX_COMMENT_ATTACHMENT_TOTAL_BYTES, sanitizeAttachmentFilename, validateCommentAttachment } from "../shared/attachmentPolicy";
 
 export type { FlowStatus } from "../shared/flowAccess";
 export type FlowActor = { id: number; role: InstitutionalRole };
@@ -97,13 +97,18 @@ export async function addComment(input: { flowId: number; actor: FlowActor; elem
   requirePermission(input.actor, "comment");
   const flow = await getAccessibleFlow(input.flowId, input.actor);
   if (!flow) throw new Error("Fluxo não encontrado.");
-  const inserted = await db.insert(flowComments).values({ flowId: input.flowId, elementId: input.elementId, content: input.content, authorId: input.actor.id });
-  const commentId = Number(inserted[0].insertId);
-  for (const attachment of input.attachments) {
+  const preparedAttachments = input.attachments.map(attachment => {
     const validationError = validateCommentAttachment(attachment);
     if (validationError) throw new Error(validationError);
-    const cleanName = sanitizeAttachmentFilename(attachment.filename);
     const bytes = Buffer.from(attachment.contentBase64, "base64");
+    if (bytes.length !== attachment.size || bytes.length > MAX_COMMENT_ATTACHMENT_BYTES) throw new Error("O tamanho real do anexo não confere com o tamanho informado.");
+    return { attachment, bytes, cleanName: sanitizeAttachmentFilename(attachment.filename) };
+  });
+  const totalSize = preparedAttachments.reduce((total, item) => total + item.bytes.length, 0);
+  if (totalSize > MAX_COMMENT_ATTACHMENT_TOTAL_BYTES) throw new Error("O conjunto de anexos deve ter no máximo 10 MB por comentário.");
+  const inserted = await db.insert(flowComments).values({ flowId: input.flowId, elementId: input.elementId, content: input.content, authorId: input.actor.id });
+  const commentId = Number(inserted[0].insertId);
+  for (const { attachment, bytes, cleanName } of preparedAttachments) {
     const stored = await storagePut(`protocolos/${input.flowId}/comentarios/${commentId}/${Date.now()}-${cleanName}`, bytes, attachment.mimeType);
     await db.insert(flowCommentAttachments).values({ commentId, storageKey: stored.key, url: stored.url, filename: attachment.filename.slice(0, 255), mimeType: attachment.mimeType, size: attachment.size, authorId: input.actor.id });
   }
@@ -133,6 +138,13 @@ export async function updateInstitutionalRole(actor: FlowActor, userId: number, 
   const db = await getDb();
   if (!db) throw new Error("Banco de dados indisponível.");
   requirePermission(actor, "manageUsers");
+  if (actor.id === userId) throw new Error("Não é permitido alterar o próprio perfil institucional.");
+  const target = await db.select({ id: users.id, role: users.role }).from(users).where(eq(users.id, userId)).limit(1);
+  if (!target[0]) throw new Error("Usuário institucional não encontrado.");
+  if (target[0].role === "admin" && role !== "admin") {
+    const admins = await db.select({ total: count() }).from(users).where(eq(users.role, "admin"));
+    if ((admins[0]?.total ?? 0) <= 1) throw new Error("Não é permitido remover o último administrador do editor.");
+  }
   await db.update(users).set({ role }).where(eq(users.id, userId));
   return listInstitutionalUsers(actor);
 }

@@ -39,6 +39,13 @@ export type FlowEdge = {
   order?: number;
 };
 
+export type FlowMilestone = {
+  id: string;
+  label: string;
+  x: number;
+  width: number;
+};
+
 export type FlowModel = {
   pools: FlowPool[];
   lanes: FlowLane[];
@@ -48,6 +55,7 @@ export type FlowModel = {
   sourceFileName?: string;
   sourceTitle?: string;
   importWarnings?: string[];
+  milestones?: FlowMilestone[];
 };
 
 export type FlowIssue = {
@@ -121,6 +129,11 @@ export function createDefaultFlowModel(): FlowModel {
       { id: "e22", sourceId: "controlado", targetId: "monitorar", type: "sequence", label: "NÃO" },
       { id: "e23", sourceId: "controlado", targetId: "encerrar", type: "sequence", label: "SIM" },
       { id: "e24", sourceId: "encerrar", targetId: "fim", type: "sequence", label: "" },
+    ],
+    milestones: [
+      { id: "fase-prevencao", label: "PREVENÇÃO E PREPARAÇÃO", x: 350, width: 650 },
+      { id: "fase-resposta", label: "RESPOSTA E COORDENAÇÃO", x: 1060, width: 1080 },
+      { id: "fase-recuperacao", label: "RECUPERAÇÃO E APRENDIZADO", x: 2220, width: 900 },
     ],
   };
 }
@@ -197,6 +210,20 @@ export function validateFlowModel(model: FlowModel): FlowIssue[] {
       issues.push({ id: `disconnected-out-${node.id}`, severity: "warning", message: "Ação sem conector de saída.", nodeId: node.id });
     }
   });
+
+  model.pools.forEach(pool => {
+    const poolNodeTypes = model.nodes.filter(node => lanes.get(node.laneId)?.poolId === pool.id).map(node => node.nodeType);
+    if (poolNodeTypes.length > 0 && !poolNodeTypes.includes("start")) {
+      issues.push({ id: `pool-start-${pool.id}`, severity: "warning", message: `O Pool “${pool.label}” não possui evento de início.` });
+    }
+    if (poolNodeTypes.length > 0 && !poolNodeTypes.includes("end")) {
+      issues.push({ id: `pool-end-${pool.id}`, severity: "warning", message: `O Pool “${pool.label}” não possui evento de fim.` });
+    }
+  });
+
+  if (model.milestones && new Set(model.milestones.map(milestone => milestone.id)).size !== model.milestones.length) {
+    issues.push({ id: "milestone-id", severity: "error", message: "Há fases com identificador duplicado." });
+  }
 
   return issues;
 }
