@@ -41,6 +41,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { trpc } from "@/lib/trpc";
+import { buildBpmnXml } from "../../../shared/bpmnExport";
 import { compareFlowModels } from "../../../shared/flowDiff";
 import { popFlowHistory, pushFlowHistory } from "../../../shared/flowHistory";
 import { importMarkdownToFlow, type MarkdownImportResult } from "../../../shared/markdownImporter";
@@ -438,6 +439,17 @@ export default function FlowEditor() {
     popup.document.close();
   };
 
+  const downloadBpmn = () => {
+    if (!model) return;
+    if (issueCount > 0) {
+      toast.error("Corrija os erros críticos apontados na revisão antes de baixar o fluxo BPMN.");
+      return;
+    }
+    const filename = `${(model.sourceTitle ?? "fluxo-mpsc").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").toLowerCase() || "fluxo-mpsc"}.bpmn`;
+    downloadFile(filename, buildBpmnXml(model), "application/xml");
+    toast.success("Fluxo BPMN 2.0 baixado para teste de importação no Bizagi.");
+  };
+
   if (flowQuery.isLoading || !model) {
     return <div className="flex h-[70vh] items-center justify-center text-slate-600"><Loader2 className="mr-3 h-5 w-5 animate-spin" />Carregando espaço de modelagem…</div>;
   }
@@ -462,6 +474,7 @@ export default function FlowEditor() {
             <Button variant="outline" onClick={undoLastChange} disabled={undoStack.length === 0} title="Desfazer alteração local (Ctrl+Z)"><Undo2 className="mr-2 h-4 w-4" />Desfazer</Button>
             <Dialog open={helpOpen} onOpenChange={setHelpOpen}><DialogTrigger asChild><Button variant="outline"><CircleHelp className="mr-2 h-4 w-4" />Como usar</Button></DialogTrigger><DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>Orientação de uso do editor BPMN</DialogTitle><DialogDescription>Este espaço é uma minuta de modelagem e revisão. A versão institucional definitiva deve ser validada pela CISI e modelada no Bizagi.</DialogDescription></DialogHeader><div className="space-y-4 text-sm leading-relaxed text-slate-700"><div><b>1. Estruture o fluxo.</b> Adicione ações, decisões, eventos e objetos de dados. Arraste uma ação para alterar sua baia ou sua ordem horizontal. Arraste os rótulos das baias para reordená-las.</div><div><b>2. Preserve a governança.</b> A Administração Superior permanece bloqueada na primeira baia do Pool MPSC. Para interlocução externa, use o Pool de órgãos externos e conexões do tipo “fluxo de mensagem”.</div><div><b>3. Revise propriedades.</b> Selecione uma ação ou ligação no canvas e ajuste rótulo, responsável, observações, condição e nível N0–N3. Mantenha a marcação <code>[A VALIDAR]</code> em todo dado ainda não confirmado.</div><div><b>4. Resolva alertas.</b> O painel “Revisão” aponta fluxos inválidos entre Pools, gateways sem rótulo de saída, ações desconectadas e conflitos elementares de competência.</div><div><b>5. Registre decisão e exporte.</b> Adicione comentários, registre uma versão com resumo e status, compare com versões anteriores ou restaure um rascunho. Exporte SVG, especiﬁcação JSON ou imprima em A1/PDF.</div></div></DialogContent></Dialog>
             <Button variant="outline" onClick={() => downloadFile("fluxo-mpsc-especificacao.json", JSON.stringify({ title: flowQuery.data?.title, status, model, exportedAt: new Date().toISOString() }, null, 2), "application/json")}><FileJson className="mr-2 h-4 w-4" />Especificação</Button>
+            <Button className="bg-[#1F4788] hover:bg-[#16396f]" onClick={downloadBpmn}><Download className="mr-2 h-4 w-4" />Baixar fluxo</Button>
             <Button variant="outline" onClick={() => downloadFile("fluxo-mpsc-visao.svg", buildExportSvg(model), "image/svg+xml")}><Download className="mr-2 h-4 w-4" />Imagem SVG</Button>
             <Button variant="outline" onClick={printFlow}><FileText className="mr-2 h-4 w-4" />Imprimir / PDF</Button>
             <Button className="bg-[#1F4788] hover:bg-[#16396f]" onClick={saveVersion} disabled={saveMutation.isPending}><Save className="mr-2 h-4 w-4" />{saveMutation.isPending ? "Salvando…" : "Registrar versão"}</Button>

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { ADMINISTRATION_LANE_ID, createDefaultFlowModel, validateFlowModel } from "../shared/flowModel";
 import { compareFlowModels } from "../shared/flowDiff";
+import { buildBpmnXml } from "../shared/bpmnExport";
 import { popFlowHistory, pushFlowHistory } from "../shared/flowHistory";
 import { importMarkdownToFlow } from "../shared/markdownImporter";
 
@@ -70,5 +71,15 @@ describe("regras de validação do fluxo BPMN", () => {
     expect(imported.model.nodes.some(node => node.label.startsWith("N3"))).toBe(true);
     expect(imported.model.nodes.some(node => node.laneId === "externo-resposta")).toBe(true);
     expect(imported.summary.validationFields).toBeGreaterThan(0);
+  });
+
+  it("exporta o fluxo em BPMN 2.0 com participantes, baias e waypoints corretos", () => {
+    const xml = buildBpmnXml(createDefaultFlowModel());
+    expect(xml).toContain('xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"');
+    expect(xml).toContain('xmlns:di="http://www.omg.org/spec/DD/20100524/DI"');
+    expect(xml).toContain('<bpmn:participant id="Participant_mpsc"');
+    expect(xml).toContain(`<bpmn:lane id="${ADMINISTRATION_LANE_ID}"`);
+    expect(xml).toContain("<bpmndi:BPMNEdge");
+    expect(xml).toContain("<di:waypoint");
   });
 });

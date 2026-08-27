@@ -21,3 +21,5 @@
 - [x] Verificar os controles de importação visualmente e validar programaticamente o fluxo gerado a partir do Markdown fornecido.
 - [x] Implementar histórico local de alterações com botão Desfazer e atalho Ctrl+Z.
 - [x] Criar teste para desfazer sem violar o bloqueio da Administração Superior.
+- [x] Implementar exportação do fluxo atual em arquivo BPMN 2.0 com Pools, baias, elementos e conectores.
+- [x] Adicionar botão destacado Baixar fluxo e testar a estrutura BPMN exportada.
