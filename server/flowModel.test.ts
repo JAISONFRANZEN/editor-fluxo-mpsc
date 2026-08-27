@@ -119,13 +119,17 @@ describe("regras de validação do fluxo BPMN", () => {
   });
 
   it("exporta o fluxo em BPMN 2.0 com participantes, baias e waypoints corretos", () => {
-    const xml = buildBpmnXml(createDefaultFlowModel());
+    const model = createDefaultFlowModel();
+    const originalPoolOrder = model.pools.map(pool => pool.id);
+    const xml = buildBpmnXml(model);
     expect(xml).toContain('xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"');
     expect(xml).toContain('xmlns:di="http://www.omg.org/spec/DD/20100524/DI"');
     expect(xml).toContain('<bpmn:participant id="Participant_mpsc"');
     expect(xml).toContain(`<bpmn:lane id="${ADMINISTRATION_LANE_ID}"`);
     expect(xml).toContain("<bpmndi:BPMNEdge");
     expect(xml).toContain("<di:waypoint");
+    expect(xml).toMatch(/bpmnElement="inicio"><dc:Bounds x="\d+" y="\d+" width="56" height="56"/);
+    expect(model.pools.map(pool => pool.id)).toEqual(originalPoolOrder);
   });
 
   it("gera prompt de infográfico claro e preserva os avisos institucionais pendentes", () => {

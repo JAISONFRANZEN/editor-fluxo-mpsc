@@ -51,6 +51,7 @@
 - [x] Incluir os marcos de Prevenção/Preparação, Resposta/Coordenação e Recuperação/Aprendizado no canvas e nas exportações visuais, sem alterar o XML BPMN 2.0.
 - [ ] Verificar no navegador a exportação SVG/PDF com os marcos visuais antes de disponibilizá-la para uso institucional.
 - [ ] Validar um arquivo BPMN exportado pelo editor no Bizagi Modeler em ambiente real.
+- [ ] Corrigir a desconfiguração visual observada no arquivo exportado, reduzindo a necessidade de edição manual após o download.
 - [x] Implementar ligação visual por arraste entre elementos, com âncoras e regras entre Pools.
 - [x] Concluir trilha de auditoria append-only por fluxo, com atualização dinâmica do painel e teste automatizado da rota de registro/listagem.
 - [x] Adicionar teste automatizado da rota tRPC flow.audit e da integração de registro/listagem da auditoria via router.
