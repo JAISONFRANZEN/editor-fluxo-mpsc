@@ -19,6 +19,7 @@ import {
   Settings2,
   ShieldCheck,
   Undo2,
+  Upload,
   Workflow,
   X,
 } from "lucide-react";
@@ -41,6 +42,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { trpc } from "@/lib/trpc";
 import { compareFlowModels } from "../../../shared/flowDiff";
+import { popFlowHistory, pushFlowHistory } from "../../../shared/flowHistory";
+import { importMarkdownToFlow, type MarkdownImportResult } from "../../../shared/markdownImporter";
 import {
   ADMINISTRATION_LANE_ID,
   type FlowEdge,
@@ -167,7 +170,13 @@ export default function FlowEditor() {
   const [newLaneLabel, setNewLaneLabel] = useState("");
   const [newLanePool, setNewLanePool] = useState<"mpsc" | "externo">("mpsc");
   const [helpOpen, setHelpOpen] = useState(false);
+  const [undoStack, setUndoStack] = useState<FlowModel[]>([]);
+  const [pendingImport, setPendingImport] = useState<MarkdownImportResult | null>(null);
+  const [isReadingMarkdown, setIsReadingMarkdown] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const priorModelRef = useRef<FlowModel | null>(null);
+  const skipUndoRecordRef = useRef(false);
   const utils = trpc.useUtils();
   const flowId = flowQuery.data?.id;
   const saveMutation = trpc.flow.save.useMutation();
@@ -183,6 +192,15 @@ export default function FlowEditor() {
       setStatus(flowQuery.data.status);
     }
   }, [flowQuery.data, model]);
+
+  useEffect(() => {
+    if (!model) return;
+    if (priorModelRef.current && !skipUndoRecordRef.current) {
+      setUndoStack(history => pushFlowHistory(history, priorModelRef.current as FlowModel));
+    }
+    priorModelRef.current = JSON.parse(JSON.stringify(model)) as FlowModel;
+    skipUndoRecordRef.current = false;
+  }, [model]);
 
   const lanes = useMemo(() => (model ? sortedLanes(model) : []), [model]);
   const selectedNode = model?.nodes.find(node => node.id === selectedNodeId) ?? null;
@@ -250,6 +268,65 @@ export default function FlowEditor() {
     setNewLaneLabel("");
     toast.success("Nova baia adicionada ao rascunho.");
   };
+
+  const undoLastChange = () => {
+    const result = popFlowHistory(undoStack);
+    if (!result) {
+      toast.message("Não há alteração local para desfazer.");
+      return;
+    }
+    skipUndoRecordRef.current = true;
+    setUndoStack(result.history);
+    setModel(result.model);
+    toast.success("Alteração local desfeita.");
+  };
+
+  const readMarkdownFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error("O arquivo Markdown deve ter até 2 MB.");
+      return;
+    }
+    if (!/\.(md|markdown|txt)$/i.test(file.name) && !file.type.includes("markdown") && !file.type.startsWith("text/")) {
+      toast.error("Selecione um arquivo Markdown ou texto estruturado.");
+      return;
+    }
+    setIsReadingMarkdown(true);
+    try {
+      const content = await file.text();
+      if (content.trim().length < 40) throw new Error("O arquivo não contém orientações suficientes para gerar uma visão inicial.");
+      setPendingImport(importMarkdownToFlow(content, file.name));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Não foi possível ler o arquivo Markdown.");
+    } finally {
+      setIsReadingMarkdown(false);
+    }
+  };
+
+  const applyMarkdownImport = () => {
+    if (!pendingImport) return;
+    setSelectedNodeId(null);
+    setSelectedEdgeId(null);
+    setChangeSummary(`Importação de orientações do arquivo ${pendingImport.model.sourceFileName}.`);
+    setModel(JSON.parse(JSON.stringify(pendingImport.model)) as FlowModel);
+    setPendingImport(null);
+    toast.success("Visão inicial criada a partir do Markdown. Revise e registre uma nova versão quando estiver pronta.");
+  };
+
+  useEffect(() => {
+    const handleKeyboardUndo = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const typing = target?.closest("input, textarea, [contenteditable='true']");
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z" && !event.shiftKey && !typing) {
+        event.preventDefault();
+        undoLastChange();
+      }
+    };
+    window.addEventListener("keydown", handleKeyboardUndo);
+    return () => window.removeEventListener("keydown", handleKeyboardUndo);
+  }, [undoStack]);
 
   const handleNodeDrop = (event: React.DragEvent<HTMLDivElement>, laneId: string) => {
     event.preventDefault();
@@ -374,17 +451,21 @@ export default function FlowEditor() {
             <div className="min-w-0">
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#4A90E2]">MPSC · CISI</p>
               <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">Editor de Protocolos BPMN</h1>
-              <p className="truncate text-sm text-slate-500">Fluxo Básico de Acionamento — Nível Promotoria de Justiça</p>
+              <p className="truncate text-sm text-slate-500">{model.sourceTitle ?? "Fluxo Básico de Acionamento — Nível Promotoria de Justiça"}{model.sourceFileName ? ` · fonte: ${model.sourceFileName}` : ""}</p>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline" className="border-[#4A90E2]/40 bg-blue-50 px-3 py-1 text-[#1F4788]">v{flowQuery.data?.currentVersion ?? 1} · {statusLabels[status]}</Badge>
             <Badge className={issueCount ? "bg-red-600" : "bg-emerald-600"}>{issueCount ? `${issueCount} erro(s) crítico(s)` : "Modelo consistente"}</Badge>
+            <input ref={fileInputRef} type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" className="hidden" onChange={readMarkdownFile} />
+            <Button variant="outline" onClick={() => fileInputRef.current?.click()} disabled={isReadingMarkdown}><Upload className="mr-2 h-4 w-4" />{isReadingMarkdown ? "Lendo MD…" : "Importar MD"}</Button>
+            <Button variant="outline" onClick={undoLastChange} disabled={undoStack.length === 0} title="Desfazer alteração local (Ctrl+Z)"><Undo2 className="mr-2 h-4 w-4" />Desfazer</Button>
             <Dialog open={helpOpen} onOpenChange={setHelpOpen}><DialogTrigger asChild><Button variant="outline"><CircleHelp className="mr-2 h-4 w-4" />Como usar</Button></DialogTrigger><DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>Orientação de uso do editor BPMN</DialogTitle><DialogDescription>Este espaço é uma minuta de modelagem e revisão. A versão institucional definitiva deve ser validada pela CISI e modelada no Bizagi.</DialogDescription></DialogHeader><div className="space-y-4 text-sm leading-relaxed text-slate-700"><div><b>1. Estruture o fluxo.</b> Adicione ações, decisões, eventos e objetos de dados. Arraste uma ação para alterar sua baia ou sua ordem horizontal. Arraste os rótulos das baias para reordená-las.</div><div><b>2. Preserve a governança.</b> A Administração Superior permanece bloqueada na primeira baia do Pool MPSC. Para interlocução externa, use o Pool de órgãos externos e conexões do tipo “fluxo de mensagem”.</div><div><b>3. Revise propriedades.</b> Selecione uma ação ou ligação no canvas e ajuste rótulo, responsável, observações, condição e nível N0–N3. Mantenha a marcação <code>[A VALIDAR]</code> em todo dado ainda não confirmado.</div><div><b>4. Resolva alertas.</b> O painel “Revisão” aponta fluxos inválidos entre Pools, gateways sem rótulo de saída, ações desconectadas e conflitos elementares de competência.</div><div><b>5. Registre decisão e exporte.</b> Adicione comentários, registre uma versão com resumo e status, compare com versões anteriores ou restaure um rascunho. Exporte SVG, especiﬁcação JSON ou imprima em A1/PDF.</div></div></DialogContent></Dialog>
             <Button variant="outline" onClick={() => downloadFile("fluxo-mpsc-especificacao.json", JSON.stringify({ title: flowQuery.data?.title, status, model, exportedAt: new Date().toISOString() }, null, 2), "application/json")}><FileJson className="mr-2 h-4 w-4" />Especificação</Button>
             <Button variant="outline" onClick={() => downloadFile("fluxo-mpsc-visao.svg", buildExportSvg(model), "image/svg+xml")}><Download className="mr-2 h-4 w-4" />Imagem SVG</Button>
             <Button variant="outline" onClick={printFlow}><FileText className="mr-2 h-4 w-4" />Imprimir / PDF</Button>
             <Button className="bg-[#1F4788] hover:bg-[#16396f]" onClick={saveVersion} disabled={saveMutation.isPending}><Save className="mr-2 h-4 w-4" />{saveMutation.isPending ? "Salvando…" : "Registrar versão"}</Button>
+            <Dialog open={Boolean(pendingImport)} onOpenChange={open => { if (!open) setPendingImport(null); }}><DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>Confirmar geração da visão BPMN</DialogTitle><DialogDescription>O arquivo será convertido em um rascunho inicial editável. Nenhuma versão será registrada até que você selecione “Registrar versão”.</DialogDescription></DialogHeader>{pendingImport && <div className="space-y-4 text-sm text-slate-700"><div className="rounded-xl border border-blue-200 bg-blue-50 p-4"><p className="font-semibold text-[#1F4788]">{pendingImport.model.sourceFileName}</p><p className="mt-1">{pendingImport.summary.pools} Pools · {pendingImport.summary.lanes} baias · {pendingImport.summary.nodes} elementos iniciais · {pendingImport.summary.validationFields} marcações [A VALIDAR]</p></div><div><p className="font-semibold">Como o sistema interpretou o MD</p><p className="mt-1 leading-relaxed">As seções e atividades identificáveis são convertidas em uma visão inicial do fluxo. Itens ambíguos permanecem no modelo-base e devem ser revisados no canvas.</p></div>{pendingImport.warnings.length > 0 && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3"><p className="font-semibold text-amber-900">Pontos para revisão</p><ul className="mt-1 list-disc space-y-1 pl-5 text-amber-900">{pendingImport.warnings.map(warning => <li key={warning}>{warning}</li>)}</ul></div>}<div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setPendingImport(null)}>Cancelar</Button><Button className="bg-[#1F4788] hover:bg-[#16396f]" onClick={applyMarkdownImport}>Gerar visão editável</Button></div></div>}</DialogContent></Dialog>
           </div>
         </div>
       </header>

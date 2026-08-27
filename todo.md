@@ -14,3 +14,10 @@
 - [x] Criar testes unitários para regras de ordenação, validação e versionamento.
 - [x] Verificar visualmente o editor em desktop e registrar a revisão final.
 - [x] Incluir orientação de uso e próximos passos diretamente no editor institucional.
+- [x] Implementar importação local de arquivo Markdown com orientações de fluxo.
+- [x] Converter seções, baias, ações, decisões, níveis N0–N3 e campos [A VALIDAR] do Markdown em visão BPMN editável.
+- [x] Exibir prévia de leitura do Markdown e exigir confirmação antes de substituir o fluxo em edição.
+- [x] Criar testes para a conversão de Markdown e a preservação da Administração Superior na primeira baia.
+- [x] Verificar os controles de importação visualmente e validar programaticamente o fluxo gerado a partir do Markdown fornecido.
+- [x] Implementar histórico local de alterações com botão Desfazer e atalho Ctrl+Z.
+- [x] Criar teste para desfazer sem violar o bloqueio da Administração Superior.

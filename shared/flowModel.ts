@@ -44,6 +44,10 @@ export type FlowModel = {
   lanes: FlowLane[];
   nodes: FlowNode[];
   edges: FlowEdge[];
+  sourceMarkdown?: string;
+  sourceFileName?: string;
+  sourceTitle?: string;
+  importWarnings?: string[];
 };
 
 export type FlowIssue = {
