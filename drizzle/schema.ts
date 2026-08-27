@@ -16,7 +16,7 @@ export const users = mysqlTable("users", {
   name: text("name"),
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
-  role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
+  role: mysqlEnum("role", ["user", "revisor", "aprovador", "admin"]).default("user").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
@@ -58,6 +58,19 @@ export const flowComments = mysqlTable("flowComments", {
   resolvedAt: timestamp("resolvedAt"),
 });
 
+export const flowCommentAttachments = mysqlTable("flowCommentAttachments", {
+  id: int("id").autoincrement().primaryKey(),
+  commentId: int("commentId").notNull().references(() => flowComments.id),
+  storageKey: varchar("storageKey", { length: 500 }).notNull(),
+  url: varchar("url", { length: 750 }).notNull(),
+  filename: varchar("filename", { length: 255 }).notNull(),
+  mimeType: varchar("mimeType", { length: 120 }).notNull(),
+  size: int("size").notNull(),
+  authorId: int("authorId").notNull().references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
 export type ProtocolFlow = typeof protocolFlows.$inferSelect;
 export type FlowVersion = typeof flowVersions.$inferSelect;
 export type FlowComment = typeof flowComments.$inferSelect;
+export type FlowCommentAttachment = typeof flowCommentAttachments.$inferSelect;

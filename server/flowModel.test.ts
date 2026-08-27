@@ -3,8 +3,11 @@ import { readFileSync } from "node:fs";
 import { ADMINISTRATION_LANE_ID, createDefaultFlowModel, validateFlowModel } from "../shared/flowModel";
 import { compareFlowModels } from "../shared/flowDiff";
 import { buildBpmnXml } from "../shared/bpmnExport";
+import { calculateCanvasDropX } from "../shared/canvasGeometry";
 import { popFlowHistory, pushFlowHistory } from "../shared/flowHistory";
 import { importMarkdownToFlow } from "../shared/markdownImporter";
+import { sanitizeAttachmentFilename, validateCommentAttachment } from "../shared/attachmentPolicy";
+import { canSaveStatus, rolePermissions } from "../shared/flowAccess";
 
 describe("regras de validação do fluxo BPMN", () => {
   it("aceita o fluxo-base com a Administração Superior na primeira baia", () => {
@@ -89,11 +92,47 @@ describe("regras de validação do fluxo BPMN", () => {
       { id: "decisao", laneId: "mpsc-admin-superior", label: "Deliberar sobre escalonamento", nodeType: "decision", x: 90, y: 0, responsible: "Administração Superior", notes: "", gatewayCondition: "", level: null, requiresValidation: false },
       { id: "paralelo", laneId: "mpsc-cisi", label: "Providências simultâneas", nodeType: "parallelGateway", x: 320, y: 0, responsible: "CISI", notes: "", gatewayCondition: "", level: null, requiresValidation: false },
       { id: "nota", laneId: "mpsc-cisi", label: "Validar canal de acionamento", nodeType: "annotation", x: 560, y: 0, responsible: "CISI", notes: "", gatewayCondition: "", level: null, requiresValidation: true },
+      { id: "intermediario", laneId: "mpsc-cisi", label: "Aguardar atualização oficial", nodeType: "intermediate", x: 800, y: 0, responsible: "CISI", notes: "", gatewayCondition: "", level: null, requiresValidation: false },
+      { id: "subprocesso", laneId: "mpsc-cisi", label: "Executar plano de continuidade", nodeType: "subprocess", x: 1040, y: 0, responsible: "CISI", notes: "", gatewayCondition: "", level: null, requiresValidation: false },
+      { id: "inclusivo", laneId: "mpsc-cisi", label: "Condições aplicáveis", nodeType: "inclusiveGateway", x: 1280, y: 0, responsible: "CISI", notes: "", gatewayCondition: "A / B", level: null, requiresValidation: false },
+      { id: "evento", laneId: "mpsc-cisi", label: "Evento prioritário", nodeType: "eventGateway", x: 1520, y: 0, responsible: "CISI", notes: "", gatewayCondition: "Primeiro evento", level: null, requiresValidation: false },
+      { id: "repositorio", laneId: "mpsc-cisi", label: "Repositório de ocorrências", nodeType: "dataStore", x: 1760, y: 0, responsible: "CISI", notes: "", gatewayCondition: "", level: null, requiresValidation: false },
     );
     model.edges.push({ id: "associacao", sourceId: "paralelo", targetId: "nota", type: "association", label: "Observação" });
     const xml = buildBpmnXml(model);
     expect(xml).toContain('<bpmn:parallelGateway id="paralelo"');
     expect(xml).toContain('<bpmn:textAnnotation id="nota">');
     expect(xml).toContain('<bpmn:association id="associacao"');
+    expect(xml).toContain('<bpmn:intermediateCatchEvent id="intermediario"');
+    expect(xml).toContain('<bpmn:subProcess id="subprocesso"');
+    expect(xml).toContain('<bpmn:inclusiveGateway id="inclusivo"');
+    expect(xml).toContain('<bpmn:eventBasedGateway id="evento"');
+    expect(xml).toContain('<bpmn:dataStoreReference id="repositorio"');
+  });
+
+  it("preserva a posição de soltura do elemento com zoom e rolagem", () => {
+    expect(calculateCanvasDropX({ clientX: 510, canvasLeft: 110, scrollLeft: 200, zoomPercent: 100 })).toBe(505);
+    expect(calculateCanvasDropX({ clientX: 510, canvasLeft: 110, scrollLeft: 200, zoomPercent: 200 })).toBe(205);
+  });
+
+  it("impede a criação de elemento antes da margem mínima do canvas", () => {
+    expect(calculateCanvasDropX({ clientX: 10, canvasLeft: 110, scrollLeft: 0, zoomPercent: 100 })).toBe(30);
+  });
+
+  it("aplica as permissões institucionais de revisor e aprovador", () => {
+    expect(rolePermissions.revisor.edit).toBe(true);
+    expect(rolePermissions.revisor.approve).toBe(false);
+    expect(rolePermissions.aprovador.edit).toBe(false);
+    expect(rolePermissions.aprovador.approve).toBe(true);
+    expect(canSaveStatus("revisor", "under_review")).toBe(true);
+    expect(canSaveStatus("revisor", "approved")).toBe(false);
+    expect(canSaveStatus("aprovador", "approved")).toBe(true);
+  });
+
+  it("valida metadados e nome seguro de anexo de comentário", () => {
+    expect(validateCommentAttachment({ filename: "risco.pdf", mimeType: "application/pdf", size: 2048 })).toBeNull();
+    expect(validateCommentAttachment({ filename: "risco.exe", mimeType: "application/x-msdownload", size: 2048 })).toContain("não permitido");
+    expect(validateCommentAttachment({ filename: "grande.pdf", mimeType: "application/pdf", size: 6 * 1024 * 1024 })).toContain("5 MB");
+    expect(sanitizeAttachmentFilename("Parecer Técnico nº 1.pdf")).toBe("Parecer_T_cnico_n__1.pdf");
   });
 });

@@ -1,4 +1,4 @@
-export type FlowNodeType = "start" | "end" | "task" | "decision" | "gateway" | "parallelGateway" | "data" | "annotation";
+export type FlowNodeType = "start" | "intermediate" | "end" | "task" | "decision" | "subprocess" | "gateway" | "parallelGateway" | "inclusiveGateway" | "eventGateway" | "data" | "dataStore" | "annotation";
 export type FlowLevel = "N0" | "N1" | "N2" | "N3" | null;
 export type FlowEdgeType = "sequence" | "message" | "association";
 
@@ -175,7 +175,7 @@ export function validateFlowModel(model: FlowModel): FlowIssue[] {
     }
   });
 
-  model.nodes.filter(node => node.nodeType === "gateway").forEach(gateway => {
+  model.nodes.filter(node => ["gateway", "parallelGateway", "inclusiveGateway", "eventGateway"].includes(node.nodeType)).forEach(gateway => {
     const outgoing = model.edges.filter(edge => edge.sourceId === gateway.id);
     if (outgoing.length === 0) {
       issues.push({ id: `gateway-empty-${gateway.id}`, severity: "error", message: "Gateway sem saída definida.", nodeId: gateway.id });

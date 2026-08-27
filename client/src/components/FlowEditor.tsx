@@ -5,6 +5,7 @@ import {
   ChevronDown,
   CircleHelp,
   CircleDot,
+  Database,
   Download,
   FileJson,
   FileText,
@@ -13,15 +14,21 @@ import {
   History,
   Link2,
   Loader2,
+  Maximize2,
   MessageSquare,
+  Minus,
+  Paperclip,
   Plus,
   Save,
   Settings2,
   ShieldCheck,
   Undo2,
   Upload,
+  UserRoundCog,
   Workflow,
   X,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -41,10 +48,12 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { trpc } from "@/lib/trpc";
-import { buildBpmnXml } from "../../../shared/bpmnExport";
+import { buildBpmnXml } from "@shared/bpmnExport";
+import { calculateCanvasDropX } from "@shared/canvasGeometry";
 import { compareFlowModels } from "../../../shared/flowDiff";
 import { popFlowHistory, pushFlowHistory } from "../../../shared/flowHistory";
 import { importMarkdownToFlow, type MarkdownImportResult } from "../../../shared/markdownImporter";
+import { roleLabels } from "../../../shared/flowAccess";
 import {
   ADMINISTRATION_LANE_ID,
   type FlowEdge,
@@ -70,12 +79,17 @@ const statusLabels = {
 
 const nodeTypeLabels: Record<FlowNodeType, string> = {
   start: "Evento de início",
+  intermediate: "Evento intermediário",
   end: "Evento de fim",
   task: "Tarefa",
   decision: "Tarefa de decisão / deliberação",
+  subprocess: "Subprocesso",
   gateway: "Gateway",
   parallelGateway: "Gateway paralelo (AND)",
+  inclusiveGateway: "Gateway inclusivo (OR)",
+  eventGateway: "Gateway baseado em eventos",
   data: "Objeto de dados",
+  dataStore: "Repositório de dados",
   annotation: "Anotação / observação",
 };
 
@@ -93,10 +107,43 @@ function escapeXml(value: string) {
   return value.replace(/[<>&"']/g, character => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;" })[character] || character);
 }
 
+const legendEntries = [
+  ["start", "Evento de início"], ["intermediate", "Evento intermediário"], ["end", "Evento de fim"], ["task", "Tarefa / atividade"],
+  ["decision", "Tarefa de decisão / deliberação"], ["subprocess", "Subprocesso"], ["xor", "Gateway exclusivo (XOR)"], ["and", "Gateway paralelo (AND)"],
+  ["or", "Gateway inclusivo (OR)"], ["event", "Gateway baseado em eventos"], ["sequence", "Fluxo de sequência"], ["message", "Fluxo de mensagem"],
+  ["data", "Objeto de dados"], ["store", "Repositório de dados"], ["annotation", "Anotação / observação"], ["association", "Associação / anotação"],
+] as const;
+
+function BpmnLegend() {
+  const glyph = (kind: typeof legendEntries[number][0]) => {
+    if (kind === "start") return <span className="h-5 w-5 rounded-full border-2 border-lime-600 bg-lime-200" />;
+    if (kind === "intermediate") return <span className="h-5 w-5 rounded-full border-[3px] border-lime-600 bg-lime-50" />;
+    if (kind === "end") return <span className="h-5 w-5 rounded-full border-[3px] border-red-600 bg-red-200" />;
+    if (kind === "task") return <span className="h-5 w-7 rounded-md border-2 border-[#4A90E2] bg-blue-50" />;
+    if (kind === "decision") return <span className="h-5 w-7 rounded-md border-2 border-violet-400 bg-violet-50" />;
+    if (kind === "subprocess") return <span className="flex h-5 w-7 items-center justify-center rounded-md border-2 border-[#4A90E2] bg-blue-50 text-[11px] text-[#1F4788]">+</span>;
+    if (["xor", "and", "or", "event"].includes(kind)) return <span className="flex h-6 w-6 items-center justify-center rotate-45 border-2 border-[#E59B23] bg-amber-50 text-sm text-amber-900"><span className="-rotate-45 font-bold">{kind === "xor" ? "×" : kind === "and" ? <span className="text-green-700">+</span> : kind === "or" ? "○" : "◎"}</span></span>;
+    if (kind === "sequence") return <span className="relative h-4 w-9 border-t-2 border-black before:absolute before:right-0 before:-top-1.5 before:border-y-[5px] before:border-l-[8px] before:border-y-transparent before:border-l-black" />;
+    if (kind === "message") return <span className="relative h-4 w-9 border-t-2 border-dashed border-black before:absolute before:-left-0.5 before:-top-1.5 before:h-2 before:w-2 before:rounded-full before:border before:border-black before:bg-white after:absolute after:right-0 after:-top-1.5 after:border-y-[5px] after:border-l-[8px] after:border-y-transparent after:border-l-black" />;
+    if (kind === "association") return <span className="relative h-4 w-9 border-t-2 border-dashed border-black after:absolute after:right-0 after:-top-1 after:text-xs after:font-bold after:content-['›']" />;
+    if (kind === "data") return <span className="relative h-6 w-5 border-2 border-slate-500 bg-white after:absolute after:-right-0.5 after:-top-0.5 after:h-2 after:w-2 after:border-b-2 after:border-l-2 after:border-slate-500 after:bg-slate-100" />;
+    if (kind === "store") return <span className="h-5 w-7 rounded-[50%] border-2 border-slate-500 bg-white" />;
+    return <span className="h-6 w-7 rounded-md border-2 border-amber-400 bg-amber-50" />;
+  };
+  return <div className="absolute bottom-5 left-5 z-30 w-[920px] rounded-xl border border-slate-300 bg-white/95 p-4 shadow-sm backdrop-blur"><div className="mb-3 flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[#1F4788]" /><h3 className="text-sm font-bold tracking-wide text-[#1F4788]">LEGENDA — BPMN 2.0</h3></div><div className="grid grid-cols-2 gap-x-7 gap-y-2 text-xs text-slate-700">{legendEntries.map(([kind, label]) => <div key={kind} className="flex items-center gap-2">{glyph(kind)}<span>{label}</span></div>)}</div></div>;
+}
+
+function buildCompleteLegendSvg(legendY: number) {
+  const visual: Record<string, string> = {
+    start: "<circle cx='14' cy='0' r='10' fill='#B7E47B' stroke='#65A30D' stroke-width='2'/>", intermediate: "<circle cx='14' cy='0' r='10' fill='#E9F7EF' stroke='#65A30D' stroke-width='3'/>", end: "<circle cx='14' cy='0' r='10' fill='#F5A6A6' stroke='#D14343' stroke-width='3'/>", task: "<rect x='0' y='-10' width='28' height='20' rx='4' fill='#EDF5FD' stroke='#4A90E2'/>", decision: "<rect x='0' y='-10' width='28' height='20' rx='4' fill='#F0ECF8' stroke='#7D6AAE'/>", subprocess: "<rect x='0' y='-10' width='28' height='20' rx='4' fill='#EDF5FD' stroke='#4A90E2'/><text x='14' y='5' font-size='13' text-anchor='middle'>+</text>", xor: "<polygon points='14,-11 27,0 14,11 1,0' fill='#FFF4D6' stroke='#E59B23'/><text x='14' y='5' font-size='13' text-anchor='middle'>×</text>", and: "<polygon points='14,-11 27,0 14,11 1,0' fill='#FFF4D6' stroke='#E59B23'/><text x='14' y='5' font-size='13' fill='#3C8A38' text-anchor='middle'>+</text>", or: "<polygon points='14,-11 27,0 14,11 1,0' fill='#FFF4D6' stroke='#E59B23'/><circle cx='14' cy='0' r='6' fill='none' stroke='#8A5B00'/>", event: "<polygon points='14,-11 27,0 14,11 1,0' fill='#FFF4D6' stroke='#E59B23'/><circle cx='14' cy='0' r='7' fill='none' stroke='#8A5B00'/><circle cx='14' cy='0' r='3' fill='none' stroke='#8A5B00'/>", sequence: "<path d='M0,0 H34' stroke='#111827' stroke-width='2' marker-end='url(#arrow)'/>", message: "<circle cx='4' cy='0' r='4' fill='white' stroke='#111827'/><path d='M0,0 H34' stroke='#111827' stroke-width='2' stroke-dasharray='5 4' marker-end='url(#arrow)'/>", data: "<path d='M0,-11 h20 l8,7 v15 h-28 z M20,-11 v7 h8' fill='white' stroke='#687385'/>", store: "<path d='M2,-7 a12,5 0 0 1 24,0 v12 a12,5 0 0 1 -24,0 z M2,-7 a12,5 0 0 0 24,0' fill='white' stroke='#687385'/>", annotation: "<rect x='0' y='-10' width='28' height='20' rx='4' fill='#FFF9EB' stroke='#E8B04F'/>", association: "<path d='M0,0 H34' stroke='#111827' stroke-width='2' stroke-dasharray='4 5' marker-end='url(#open-arrow)'/>"
+  };
+  return legendEntries.map(([kind, label], index) => { const column = index % 2; const row = Math.floor(index / 2); const x = 60 + column * 560; const y = legendY + 52 + row * 34; return `<g transform='translate(${x},${y})'>${visual[kind]}<text x='46' y='5' font-family='Inter, Arial' font-size='14' fill='#334155'>${label}</text></g>`; }).join("");
+}
+
 function buildExportSvg(model: FlowModel) {
   const lanes = sortedLanes(model);
   const width = Math.max(3300, ...model.nodes.map(node => node.x + NODE_WIDTH + 90));
-  const height = lanes.length * LANE_HEIGHT + 330;
+  const height = lanes.length * LANE_HEIGHT + 420;
   const laneY = (laneId: string) => lanes.findIndex(lane => lane.id === laneId) * LANE_HEIGHT + 56;
   const laneFill = (lane: FlowLane) => {
     if (lane.id === ADMINISTRATION_LANE_ID) return "#E4EFFB";
@@ -114,7 +161,8 @@ function buildExportSvg(model: FlowModel) {
     const mid = Math.round((x1 + x2) / 2);
     const dash = edge.type === "message" ? "stroke-dasharray='9 6'" : edge.type === "association" ? "stroke-dasharray='4 5'" : "";
     const label = edge.label ? `<text x='${mid}' y='${Math.min(y1, y2) - 8}' font-family='Inter, Arial' font-size='14' fill='#516070' text-anchor='middle'>${escapeXml(edge.label)}</text>` : "";
-    return `<path d='M ${x1} ${y1} H ${mid} V ${y2} H ${x2}' fill='none' stroke='${edge.type === "message" ? "#687385" : edge.type === "association" ? "#9CA3AF" : "#4A90E2"}' stroke-width='2' ${dash} marker-end='url(#arrow)'/>${label}`;
+    const originCircle = edge.type === "message" ? `<circle cx='${x1 + 4}' cy='${y1}' r='4' fill='white' stroke='#111827' stroke-width='1.5'/>` : "";
+    return `${originCircle}<path d='M ${x1} ${y1} H ${mid} V ${y2} H ${x2}' fill='none' stroke='#111827' stroke-width='2' ${dash} marker-end='url(#${edge.type === "association" ? "open-arrow" : "arrow"})'/>${label}`;
   }).join("");
   const lanesSvg = lanes.map((lane, index) => {
     const y = index * LANE_HEIGHT + 56;
@@ -123,22 +171,21 @@ function buildExportSvg(model: FlowModel) {
   }).join("");
   const nodes = model.nodes.map(node => {
     const y = laneY(node.laneId) + 50;
-    const fill = node.nodeType === "gateway" ? "#FFF4D6" : node.nodeType === "parallelGateway" ? "#FFF7D1" : node.nodeType === "decision" ? "#F0ECF8" : node.nodeType === "annotation" ? "#FFF9EB" : node.nodeType === "data" ? "#FFFFFF" : node.nodeType === "end" ? "#FDEBEC" : node.nodeType === "start" ? "#E9F7EF" : "#FFFFFF";
-    const stroke = node.nodeType === "gateway" ? "#D99600" : node.nodeType === "parallelGateway" ? "#C99600" : node.nodeType === "decision" ? "#7D6AAE" : node.nodeType === "annotation" ? "#E8B04F" : node.nodeType === "data" ? "#687385" : node.nodeType === "end" ? "#D14343" : node.laneId === "mpsc-cisi" ? "#4A90E2" : "#1F4788";
-    const shape = node.nodeType === "gateway" || node.nodeType === "parallelGateway"
+    const isGateway = ["gateway", "parallelGateway", "inclusiveGateway", "eventGateway"].includes(node.nodeType);
+    const fill = node.nodeType === "decision" ? "#F0ECF8" : node.nodeType === "annotation" ? "#FFF9EB" : node.nodeType === "data" || node.nodeType === "dataStore" ? "#FFFFFF" : node.nodeType === "end" ? "#FDEBEC" : node.nodeType === "start" || node.nodeType === "intermediate" ? "#E9F7EF" : isGateway ? "#FFF4D6" : "#EDF5FD";
+    const stroke = isGateway ? "#E59B23" : node.nodeType === "decision" ? "#7D6AAE" : node.nodeType === "annotation" ? "#E8B04F" : node.nodeType === "data" || node.nodeType === "dataStore" ? "#687385" : node.nodeType === "end" ? "#D14343" : node.nodeType === "start" || node.nodeType === "intermediate" ? "#65A30D" : "#4A90E2";
+    const shape = isGateway
       ? `<polygon points='${node.x + 95},${y} ${node.x + 190},${y + 29} ${node.x + 95},${y + 58} ${node.x},${y + 29}' fill='${fill}' stroke='${stroke}' stroke-width='2'/>`
-      : node.nodeType === "start" || node.nodeType === "end"
+      : node.nodeType === "start" || node.nodeType === "intermediate" || node.nodeType === "end"
         ? `<ellipse cx='${node.x + 95}' cy='${y + 29}' rx='88' ry='27' fill='${fill}' stroke='${stroke}' stroke-width='${node.nodeType === "end" ? 3 : 2}'/>`
-        : `<rect x='${node.x}' y='${y}' width='190' height='58' rx='8' fill='${fill}' stroke='${stroke}' stroke-width='2'/>`;
+        : node.nodeType === "data" ? `<path d='M${node.x},${y} h155 l35,18 v40 h-190 z M${node.x + 155},${y} v18 h35' fill='${fill}' stroke='${stroke}' stroke-width='2'/>` : node.nodeType === "dataStore" ? `<path d='M${node.x + 8},${y + 10} a87,13 0 0 1 174,0 v38 a87,13 0 0 1 -174,0 z M${node.x + 8},${y + 10} a87,13 0 0 0 174,0' fill='${fill}' stroke='${stroke}' stroke-width='2'/>` : `<rect x='${node.x}' y='${y}' width='190' height='58' rx='8' fill='${fill}' stroke='${stroke}' stroke-width='2'/>`;
     const marker = node.requiresValidation ? `<text x='${node.x + 95}' y='${y + 18}' font-family='Inter, Arial' font-size='10' fill='#C94C4C' text-anchor='middle'>A VALIDAR</text>` : "";
     const textY = node.requiresValidation ? y + 38 : y + 33;
-    const symbol = node.nodeType === "gateway" ? `<text x='${node.x + 95}' y='${y + 34}' font-family='Inter, Arial' font-size='17' fill='#8A5B00' text-anchor='middle'>×</text>` : node.nodeType === "parallelGateway" ? `<text x='${node.x + 95}' y='${y + 34}' font-family='Inter, Arial' font-size='17' fill='#8A5B00' text-anchor='middle'>+</text>` : "";
+    const symbol = node.nodeType === "gateway" ? `<text x='${node.x + 95}' y='${y + 34}' font-family='Inter, Arial' font-size='17' fill='#8A5B00' text-anchor='middle'>×</text>` : node.nodeType === "parallelGateway" ? `<text x='${node.x + 95}' y='${y + 34}' font-family='Inter, Arial' font-size='18' fill='#3C8A38' text-anchor='middle'>+</text>` : node.nodeType === "inclusiveGateway" ? `<circle cx='${node.x + 95}' cy='${y + 29}' r='13' fill='none' stroke='#8A5B00' stroke-width='2'/>` : node.nodeType === "eventGateway" ? `<circle cx='${node.x + 95}' cy='${y + 29}' r='14' fill='none' stroke='#8A5B00' stroke-width='2'/><circle cx='${node.x + 95}' cy='${y + 29}' r='8' fill='none' stroke='#8A5B00' stroke-width='2'/>` : node.nodeType === "subprocess" ? `<rect x='${node.x + 86}' y='${y + 43}' width='18' height='11' fill='white' stroke='#4A90E2'/><text x='${node.x + 95}' y='${y + 53}' font-family='Inter, Arial' font-size='12' fill='#1F4788' text-anchor='middle'>+</text>` : node.nodeType === "intermediate" ? `<ellipse cx='${node.x + 95}' cy='${y + 29}' rx='79' ry='21' fill='none' stroke='#65A30D' stroke-width='1.5'/>` : "";
     return `${shape}${symbol}${marker}<text x='${node.x + 95}' y='${textY + (symbol ? 13 : 0)}' font-family='Inter, Arial' font-size='12' fill='#333333' text-anchor='middle'>${escapeXml(node.label.replace("[A VALIDAR]", "").slice(0, 58))}</text>`;
   }).join("");
   const legendY = lanes.length * LANE_HEIGHT + 85;
-  const legendItems = [["#B7E47B", "Evento de início"], ["#F5A6A6", "Evento de fim"], ["#FFFFFF", "Tarefa / atividade"], ["#F0ECF8", "Tarefa de decisão / deliberação"], ["#FFF4D6", "Gateway exclusivo (XOR)"], ["#FFF7D1", "Gateway paralelo (AND)"], ["#FFFFFF", "Fluxo de sequência"], ["#FFFFFF", "Fluxo de mensagem"], ["#FFFFFF", "Objeto de dados"], ["#FFF9EB", "Anotação / observação"], ["#FFFFFF", "Associação / anotação"]];
-  const legend = legendItems.map((item, index) => { const column = index % 2; const row = Math.floor(index / 2); const x = 60 + column * 560; const y = legendY + 52 + row * 34; const arrow = index === 6 || index === 7; const association = index === 10; const diamond = index === 4 || index === 5; const icon = association ? `<path d='M${x},${y} H${x + 34}' stroke='#9CA3AF' stroke-width='2' stroke-dasharray='4 5' marker-end='url(#arrow)'/>` : arrow ? `<path d='M${x},${y} H${x + 34}' stroke='#${index === 7 ? "687385" : "1F4788"}' stroke-width='2' ${index === 7 ? "stroke-dasharray='7 5'" : ""} marker-end='url(#arrow)'/>` : diamond ? `<polygon points='${x + 14},${y - 11} ${x + 27},${y} ${x + 14},${y + 11} ${x + 1},${y}' fill='${item[0]}' stroke='#D99600'/>${index === 4 ? `<text x='${x + 14}' y='${y + 5}' font-size='13' text-anchor='middle'>×</text>` : `<text x='${x + 14}' y='${y + 5}' font-size='13' text-anchor='middle'>+</text>`}` : `<rect x='${x}' y='${y - 10}' width='28' height='20' rx='${index < 2 ? "11" : "4"}' fill='${item[0]}' stroke='#${index === 1 ? "D14343" : index === 3 ? "7D6AAE" : index === 9 ? "E8B04F" : "4A90E2"}'/>`; return `${icon}<text x='${x + 46}' y='${y + 5}' font-family='Inter, Arial' font-size='14' fill='#334155'>${item[1]}</text>`; }).join("");
-  return `<svg xmlns='http://www.w3.org/2000/svg' width='${width}' height='${height}' viewBox='0 0 ${width} ${height}'><defs><marker id='arrow' markerWidth='9' markerHeight='9' refX='7' refY='4.5' orient='auto'><path d='M0,0 L0,9 L8,4.5 z' fill='#4A90E2'/></marker></defs><rect width='100%' height='100%' fill='#F8F9FA'/><rect x='20' y='15' width='${width - 40}' height='32' fill='#1F4788'/><text x='38' y='37' font-family='Inter, Arial' font-size='18' font-weight='700' fill='white'>Fluxo Básico de Acionamento — MPSC</text>${lanesSvg}${edges}${nodes}<rect x='36' y='${legendY}' width='1160' height='220' rx='12' fill='#FFFFFF' stroke='#CBD5E1'/><text x='60' y='${legendY + 30}' font-family='Inter, Arial' font-size='17' font-weight='700' fill='#1F4788'>LEGENDA — BPMN 2.0</text>${legend}</svg>`;
+  return `<svg xmlns='http://www.w3.org/2000/svg' width='${width}' height='${height}' viewBox='0 0 ${width} ${height}'><defs><marker id='arrow' markerWidth='9' markerHeight='9' refX='7' refY='4.5' orient='auto'><path d='M0,0 L0,9 L8,4.5 z' fill='#111827'/></marker><marker id='open-arrow' markerWidth='10' markerHeight='10' refX='8' refY='5' orient='auto'><path d='M1,1 L8,5 L1,9' fill='none' stroke='#111827' stroke-width='1.5'/></marker></defs><rect width='100%' height='100%' fill='#F8F9FA'/><rect x='20' y='15' width='${width - 40}' height='32' fill='#1F4788'/><text x='38' y='37' font-family='Inter, Arial' font-size='18' font-weight='700' fill='white'>Fluxo Básico de Acionamento — MPSC</text>${lanesSvg}${edges}${nodes}<rect x='36' y='${legendY}' width='1160' height='310' rx='12' fill='#FFFFFF' stroke='#CBD5E1'/><text x='60' y='${legendY + 30}' font-family='Inter, Arial' font-size='17' font-weight='700' fill='#1F4788'>LEGENDA — BPMN 2.0</text>${buildCompleteLegendSvg(legendY)}</svg>`;
 }
 
 function sortedLanes(model: FlowModel) {
@@ -148,14 +195,16 @@ function sortedLanes(model: FlowModel) {
 }
 
 function nodeClass(node: FlowNode) {
-  if (node.nodeType === "gateway") return "h-[74px] w-[150px] rotate-0 bg-amber-50 border-amber-500 text-amber-950";
-  if (node.nodeType === "parallelGateway") return "h-[74px] w-[150px] rotate-0 bg-yellow-50 border-yellow-600 text-yellow-950";
-  if (node.nodeType === "start") return "h-[56px] w-[190px] rounded-full bg-lime-100 border-lime-600 text-lime-950";
+  if (["gateway", "parallelGateway", "inclusiveGateway", "eventGateway"].includes(node.nodeType)) return "h-[76px] w-[76px] rotate-45 bg-amber-50 border-[#E59B23] text-amber-950";
+  if (node.nodeType === "start") return "h-[56px] w-[190px] rounded-full bg-lime-200 border-lime-600 text-lime-950";
+  if (node.nodeType === "intermediate") return "h-[56px] w-[190px] rounded-full border-[3px] border-lime-600 bg-lime-50 text-lime-950";
   if (node.nodeType === "end") return "h-[56px] w-[190px] rounded-full bg-red-50 border-[3px] border-red-600 text-red-900";
   if (node.nodeType === "decision") return "h-[58px] w-[190px] rounded-lg bg-violet-50 border-violet-400 text-violet-950";
-  if (node.nodeType === "data") return "h-[62px] w-[190px] rounded-md bg-white border-slate-400 text-slate-700";
+  if (node.nodeType === "subprocess") return "h-[62px] w-[190px] rounded-lg bg-blue-50 border-[#4A90E2] text-slate-800";
+  if (node.nodeType === "data") return "h-[62px] w-[190px] rounded-none bg-white border-slate-400 text-slate-700";
+  if (node.nodeType === "dataStore") return "h-[62px] w-[190px] rounded-[50%] bg-white border-slate-500 text-slate-700";
   if (node.nodeType === "annotation") return "h-[62px] w-[190px] rounded-lg bg-amber-50 border-amber-300 text-amber-950";
-  return "h-[58px] w-[190px] rounded-lg bg-white border-[#4A90E2] text-slate-800";
+  return "h-[58px] w-[190px] rounded-lg bg-blue-50 border-[#4A90E2] text-slate-800";
 }
 
 function severityStyle(severity: FlowIssue["severity"]) {
@@ -184,8 +233,12 @@ export default function FlowEditor() {
   const [undoStack, setUndoStack] = useState<FlowModel[]>([]);
   const [pendingImport, setPendingImport] = useState<MarkdownImportResult | null>(null);
   const [isReadingMarkdown, setIsReadingMarkdown] = useState(false);
+  const [zoom, setZoom] = useState(100);
+  const [commentAttachments, setCommentAttachments] = useState<File[]>([]);
+  const [isPreparingComment, setIsPreparingComment] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const commentAttachmentInputRef = useRef<HTMLInputElement>(null);
   const priorModelRef = useRef<FlowModel | null>(null);
   const skipUndoRecordRef = useRef(false);
   const utils = trpc.useUtils();
@@ -196,6 +249,8 @@ export default function FlowEditor() {
   const resolveCommentMutation = trpc.flow.resolveComment.useMutation();
   const versionsQuery = trpc.flow.versions.useQuery({ flowId: flowId ?? -1 }, { enabled: Boolean(flowId) });
   const commentsQuery = trpc.flow.comments.useQuery({ flowId: flowId ?? -1 }, { enabled: Boolean(flowId) });
+  const usersQuery = trpc.flow.users.useQuery(undefined, { enabled: Boolean(flowQuery.data?.access?.permissions.manageUsers) });
+  const updateUserRoleMutation = trpc.flow.updateUserRole.useMutation();
 
   useEffect(() => {
     if (flowQuery.data?.modelJson && !model) {
@@ -218,6 +273,13 @@ export default function FlowEditor() {
   const selectedEdge = model?.edges.find(edge => edge.id === selectedEdgeId) ?? null;
   const issues = useMemo(() => (model ? validateFlowModel(model) : []), [model]);
   const issueCount = issues.filter(issue => issue.severity === "error").length;
+  const access = flowQuery.data?.access;
+  const canEdit = access?.permissions.edit ?? true;
+  const canComment = access?.permissions.comment ?? true;
+  const canApprove = access?.permissions.approve ?? false;
+  const canManageUsers = access?.permissions.manageUsers ?? false;
+  const zoomFactor = zoom / 100;
+  const canvasHeight = lanes.length * LANE_HEIGHT + 290;
   const hasUnregisteredChanges = useMemo(() => {
     const latest = versionsQuery.data?.[0]?.snapshot as FlowModel | undefined;
     return Boolean(latest && JSON.stringify(latest) !== JSON.stringify(model));
@@ -343,34 +405,46 @@ export default function FlowEditor() {
     return () => window.removeEventListener("keydown", handleKeyboardUndo);
   }, [undoStack]);
 
+  const createNodeAt = (nodeType: FlowNodeType, laneId: string, x: number) => {
+    if (!model || !canEdit) return;
+    const node: FlowNode = {
+      id: `node-${Date.now()}`,
+      laneId,
+      label: nodeType === "gateway" ? "Nova decisão exclusiva?" : nodeType === "parallelGateway" ? "Ativar ações em paralelo" : nodeType === "inclusiveGateway" ? "Quais condições se aplicam?" : nodeType === "eventGateway" ? "Qual evento ocorrerá primeiro?" : nodeType === "decision" ? "Nova deliberação [A VALIDAR]" : nodeType === "subprocess" ? "Novo subprocesso [A VALIDAR]" : nodeType === "annotation" ? "Nova observação [A VALIDAR]" : nodeType === "start" ? "Novo início" : nodeType === "intermediate" ? "Novo evento intermediário" : nodeType === "end" ? "Novo encerramento" : nodeType === "data" ? "Novo objeto de dados [A VALIDAR]" : nodeType === "dataStore" ? "Novo repositório de dados [A VALIDAR]" : "Nova ação [A VALIDAR]",
+      nodeType,
+      x: Math.max(30, x),
+      y: 0,
+      responsible: selectedNode?.responsible ?? "[A VALIDAR]",
+      notes: "",
+      gatewayCondition: nodeType === "gateway" ? "SIM / NÃO" : nodeType === "parallelGateway" ? "Todas as saídas aplicáveis" : nodeType === "inclusiveGateway" ? "Uma, algumas ou todas as condições" : nodeType === "eventGateway" ? "Evento que ocorrer primeiro" : "",
+      level: null,
+      requiresValidation: !["start", "intermediate", "end", "parallelGateway"].includes(nodeType),
+    };
+    setModel({ ...model, nodes: [...model.nodes, node] });
+    setSelectedNodeId(node.id);
+    setSelectedEdgeId(null);
+    toast.success("Elemento inserido. Preencha agora as propriedades no painel lateral.");
+  };
+
   const handleNodeDrop = (event: React.DragEvent<HTMLDivElement>, laneId: string) => {
     event.preventDefault();
-    if (!draggedNodeId || !canvasRef.current) return;
+    if (!canEdit || !canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
-    const x = Math.max(30, Math.round(event.clientX - rect.left + canvasRef.current.parentElement!.scrollLeft - NODE_WIDTH / 2));
+    const x = calculateCanvasDropX({ clientX: event.clientX, canvasLeft: rect.left, scrollLeft: canvasRef.current.parentElement?.scrollLeft ?? 0, zoomPercent: zoom, nodeWidth: NODE_WIDTH });
+    const paletteType = event.dataTransfer.getData("application/x-bpmn-node-type") as FlowNodeType;
+    if (paletteType && Object.prototype.hasOwnProperty.call(nodeTypeLabels, paletteType)) {
+      createNodeAt(paletteType, laneId, x);
+      return;
+    }
+    if (!draggedNodeId) return;
     setModel(current => current ? { ...current, nodes: current.nodes.map(node => node.id === draggedNodeId ? { ...node, laneId, x } : node) } : current);
     setDraggedNodeId(null);
   };
 
   const addNode = (nodeType: FlowNodeType) => {
-    if (!model) return;
+    if (!model || !canEdit) return;
     const maxX = Math.max(...model.nodes.map(node => node.x), 400);
-    const node: FlowNode = {
-      id: `node-${Date.now()}`,
-      laneId: selectedNode?.laneId ?? "mpsc-cisi",
-      label: nodeType === "gateway" ? "Nova decisão exclusiva?" : nodeType === "parallelGateway" ? "Ativa ações em paralelo" : nodeType === "decision" ? "Nova deliberação [A VALIDAR]" : nodeType === "annotation" ? "Nova observação [A VALIDAR]" : nodeType === "start" ? "Novo início" : nodeType === "end" ? "Novo encerramento" : nodeType === "data" ? "Novo objeto de dados [A VALIDAR]" : "Nova ação [A VALIDAR]",
-      nodeType,
-      x: maxX + 240,
-      y: 0,
-      responsible: selectedNode?.responsible ?? "[A VALIDAR]",
-      notes: "",
-      gatewayCondition: nodeType === "gateway" ? "SIM / NÃO" : nodeType === "parallelGateway" ? "Todas as saídas aplicáveis" : "",
-      level: null,
-      requiresValidation: true,
-    };
-    setModel({ ...model, nodes: [...model.nodes, node] });
-    setSelectedNodeId(node.id);
-    setSelectedEdgeId(null);
+    createNodeAt(nodeType, selectedNode?.laneId ?? "mpsc-cisi", maxX + 240);
   };
 
   const addEdge = () => {
@@ -430,16 +504,47 @@ export default function FlowEditor() {
     });
   };
 
-  const submitComment = () => {
-    if (!flowId || commentText.trim().length < 2) return;
-    addCommentMutation.mutate({ flowId, elementId: selectedNodeId ?? selectedEdgeId ?? undefined, content: commentText.trim() }, {
+  const fileToBase64 = (file: File) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
+    reader.onerror = () => reject(new Error("Não foi possível preparar o anexo."));
+    reader.readAsDataURL(file);
+  });
+
+  const addCommentAttachments = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (files.length === 0) return;
+    if (commentAttachments.length + files.length > 5) {
+      toast.error("Inclua no máximo 5 anexos por comentário.");
+      return;
+    }
+    if (files.some(file => file.size > 5 * 1024 * 1024)) {
+      toast.error("Cada anexo deve ter no máximo 5 MB.");
+      return;
+    }
+    setCommentAttachments(current => [...current, ...files]);
+  };
+
+  const submitComment = async () => {
+    if (!flowId || commentText.trim().length < 2 || !canComment) return;
+    setIsPreparingComment(true);
+    try {
+      const attachments = await Promise.all(commentAttachments.map(async file => ({ filename: file.name, mimeType: file.type || "application/octet-stream", size: file.size, contentBase64: await fileToBase64(file) })));
+      addCommentMutation.mutate({ flowId, elementId: selectedNodeId ?? selectedEdgeId ?? undefined, content: commentText.trim(), attachments }, {
       onSuccess: () => {
         setCommentText("");
+        setCommentAttachments([]);
         utils.flow.comments.invalidate({ flowId });
         toast.success("Comentário adicionado à revisão.");
       },
       onError: error => toast.error(error.message),
-    });
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Não foi possível preparar os anexos.");
+    } finally {
+      setIsPreparingComment(false);
+    }
   };
 
   const printFlow = () => {
@@ -483,6 +588,7 @@ export default function FlowEditor() {
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline" className="border-[#4A90E2]/40 bg-blue-50 px-3 py-1 text-[#1F4788]">v{flowQuery.data?.currentVersion ?? 1} · {statusLabels[status]}</Badge>
             <Badge className={issueCount ? "bg-red-600" : "bg-emerald-600"}>{issueCount ? `${issueCount} erro(s) crítico(s)` : "Modelo consistente"}</Badge>
+            {access && <Badge variant="outline" className="border-slate-300 bg-white text-slate-700"><UserRoundCog className="mr-1 h-3.5 w-3.5" />{roleLabels[access.role]}</Badge>}
             {hasUnregisteredChanges && <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-900">Alterações não registradas</Badge>}
             <input ref={fileInputRef} type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" className="hidden" onChange={readMarkdownFile} />
             <Button variant="outline" onClick={() => fileInputRef.current?.click()} disabled={isReadingMarkdown}><Upload className="mr-2 h-4 w-4" />{isReadingMarkdown ? "Lendo MD…" : "Importar MD"}</Button>
@@ -492,7 +598,7 @@ export default function FlowEditor() {
             <Button className="bg-[#1F4788] hover:bg-[#16396f]" onClick={downloadBpmn}><Download className="mr-2 h-4 w-4" />Baixar fluxo</Button>
             <Button variant="outline" onClick={() => downloadFile("fluxo-mpsc-visao.svg", buildExportSvg(model), "image/svg+xml")}><Download className="mr-2 h-4 w-4" />Imagem SVG</Button>
             <Button variant="outline" onClick={printFlow}><FileText className="mr-2 h-4 w-4" />Imprimir / PDF</Button>
-            <Button className="bg-[#1F4788] hover:bg-[#16396f]" onClick={saveVersion} disabled={saveMutation.isPending}><Save className="mr-2 h-4 w-4" />{saveMutation.isPending ? "Salvando…" : "Registrar versão"}</Button>
+            <Button className="bg-[#1F4788] hover:bg-[#16396f]" onClick={saveVersion} disabled={saveMutation.isPending || (!canEdit && !(canApprove && (status === "approved" || status === "archived")))}><Save className="mr-2 h-4 w-4" />{saveMutation.isPending ? "Salvando…" : status === "approved" ? "Aprovar versão" : "Registrar versão"}</Button>
             <Dialog open={Boolean(pendingImport)} onOpenChange={open => { if (!open) setPendingImport(null); }}><DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>Confirmar geração da visão BPMN</DialogTitle><DialogDescription>O arquivo será convertido em um rascunho inicial editável. Nenhuma versão será registrada até que você selecione “Registrar versão”.</DialogDescription></DialogHeader>{pendingImport && <div className="space-y-4 text-sm text-slate-700"><div className="rounded-xl border border-blue-200 bg-blue-50 p-4"><p className="font-semibold text-[#1F4788]">{pendingImport.model.sourceFileName}</p><p className="mt-1">{pendingImport.summary.pools} Pools · {pendingImport.summary.lanes} baias · {pendingImport.summary.nodes} elementos iniciais · {pendingImport.summary.validationFields} marcações [A VALIDAR]</p></div><div><p className="font-semibold">Como o sistema interpretou o MD</p><p className="mt-1 leading-relaxed">As seções e atividades identificáveis são convertidas em uma visão inicial do fluxo. Itens ambíguos permanecem no modelo-base e devem ser revisados no canvas.</p></div>{pendingImport.warnings.length > 0 && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3"><p className="font-semibold text-amber-900">Pontos para revisão</p><ul className="mt-1 list-disc space-y-1 pl-5 text-amber-900">{pendingImport.warnings.map(warning => <li key={warning}>{warning}</li>)}</ul></div>}<div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setPendingImport(null)}>Cancelar</Button><Button className="bg-[#1F4788] hover:bg-[#16396f]" onClick={applyMarkdownImport}>Gerar visão editável</Button></div></div>}</DialogContent></Dialog>
           </div>
         </div>
@@ -502,8 +608,9 @@ export default function FlowEditor() {
         <aside className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm xl:sticky xl:top-4 xl:h-[calc(100vh-3rem)]">
           <div className="mb-4 flex items-center gap-2"><div className="rounded-md bg-blue-50 p-2 text-[#1F4788]"><Plus className="h-4 w-4" /></div><div><h2 className="font-semibold">Elementos BPMN</h2><p className="text-xs text-slate-500">Adicionar ao rascunho</p></div></div>
           <div className="space-y-2">
-            {(["start", "end", "task", "decision", "gateway", "parallelGateway", "data", "annotation"] as FlowNodeType[]).map(type => <Button key={type} variant="outline" className="w-full justify-start border-slate-200" onClick={() => addNode(type)}>{type === "gateway" || type === "parallelGateway" ? <GitBranch className={`mr-2 h-4 w-4 ${type === "gateway" ? "text-amber-600" : "text-yellow-700"}`} /> : type === "data" || type === "annotation" ? <FileText className={`mr-2 h-4 w-4 ${type === "annotation" ? "text-amber-700" : "text-slate-600"}`} /> : type === "start" || type === "end" ? <CircleDot className={`mr-2 h-4 w-4 ${type === "end" ? "text-red-600" : "text-lime-600"}`} /> : <Workflow className={`mr-2 h-4 w-4 ${type === "decision" ? "text-violet-600" : "text-[#4A90E2]"}`} />}{nodeTypeLabels[type]}</Button>)}
+            {(["start", "end", "task", "decision", "gateway", "parallelGateway", "data", "annotation"] as FlowNodeType[]).map(type => <Button key={type} variant="outline" draggable={canEdit} onDragStart={event => { event.dataTransfer.setData("application/x-bpmn-node-type", type); event.dataTransfer.effectAllowed = "copy"; }} className="w-full cursor-grab justify-start border-slate-200 active:cursor-grabbing" onClick={() => addNode(type)} disabled={!canEdit}>{type === "gateway" || type === "parallelGateway" ? <GitBranch className={`mr-2 h-4 w-4 ${type === "gateway" ? "text-amber-600" : "text-yellow-700"}`} /> : type === "data" || type === "annotation" ? <FileText className={`mr-2 h-4 w-4 ${type === "annotation" ? "text-amber-700" : "text-slate-600"}`} /> : type === "start" || type === "end" ? <CircleDot className={`mr-2 h-4 w-4 ${type === "end" ? "text-red-600" : "text-lime-600"}`} /> : <Workflow className={`mr-2 h-4 w-4 ${type === "decision" ? "text-violet-600" : "text-[#4A90E2]"}`} />}{nodeTypeLabels[type]}</Button>)}
           </div>
+          <p className="mt-3 rounded-lg border border-blue-100 bg-blue-50 p-2 text-[11px] leading-relaxed text-[#1F4788]"><strong>Inserção direta.</strong> Arraste um elemento desta paleta até a posição desejada no canvas. Ao soltar, as propriedades serão abertas para preenchimento.</p>
           <Separator className="my-5" />
           <div className="space-y-3">
             <div className="flex items-center gap-2"><Link2 className="h-4 w-4 text-[#4A90E2]" /><h3 className="text-sm font-semibold">Novo conector</h3></div>
@@ -519,15 +626,16 @@ export default function FlowEditor() {
 
         <section className="min-w-0 rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3 md:flex-row md:items-center md:justify-between">
-            <div><h2 className="font-semibold text-slate-900">Canvas de revisão</h2><p className="text-sm text-slate-500">Arraste elementos entre baias ou ao longo da faixa. Arraste rótulos de baias e conectores para reordenar.</p></div>
-            <div className="flex items-center gap-2 text-xs text-slate-500"><span className="inline-flex h-2 w-2 rounded-full bg-[#4A90E2]" />fluxo de sequência <span className="ml-2 inline-flex h-2 w-2 rounded-full bg-slate-500" />mensagem externa</div>
+            <div><h2 className="font-semibold text-slate-900">Canvas de revisão</h2><p className="text-sm text-slate-500">Arraste elementos entre baias ou ao longo da faixa. Arraste novos elementos da paleta para inseri-los no ponto desejado.</p></div>
+            <div className="flex flex-wrap items-center justify-end gap-3"><div className="flex items-center gap-2 text-xs text-slate-500"><span className="inline-flex h-2 w-2 rounded-full bg-[#4A90E2]" />fluxo de sequência <span className="ml-2 inline-flex h-2 w-2 rounded-full bg-slate-500" />mensagem externa</div><div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1" aria-label="Régua de zoom do canvas"><Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setZoom(current => Math.max(50, current - 10))} disabled={zoom <= 50} title="Diminuir zoom"><ZoomOut className="h-4 w-4" /></Button><span className="min-w-12 text-center text-xs font-semibold tabular-nums text-slate-700">{zoom}%</span><Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setZoom(current => Math.min(150, current + 10))} disabled={zoom >= 150} title="Aumentar zoom"><ZoomIn className="h-4 w-4" /></Button><Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setZoom(100)} title="Ajustar para 100%"><Maximize2 className="h-4 w-4" /></Button></div></div>
           </div>
           <ScrollArea className="h-[calc(100vh-15rem)] min-h-[650px]">
-            <div className="min-w-[3320px] p-5">
-              <div ref={canvasRef} className="relative overflow-hidden rounded-xl border border-slate-300 bg-[#F8F9FA] shadow-inner" style={{ height: lanes.length * LANE_HEIGHT + 290 }}>
+            <div className="p-5" style={{ minWidth: 3340 * zoomFactor }}>
+              <div style={{ width: 3300 * zoomFactor, height: canvasHeight * zoomFactor }}>
+              <div ref={canvasRef} className="relative overflow-hidden rounded-xl border border-slate-300 bg-[#F8F9FA] shadow-inner" style={{ width: 3300, height: canvasHeight, transform: `scale(${zoomFactor})`, transformOrigin: "top left" }}>
                 <div className="absolute inset-x-0 top-0 flex h-14 items-center bg-[#1F4788] px-5 text-sm font-semibold tracking-wide text-white">POOL 1 — MPSC | GOVERNANÇA E RESPOSTA INSTITUCIONAL <span className="ml-4 border-l border-white/30 pl-4 text-xs font-medium text-blue-100">Rascunho auditável · Fluxo de nível Promotoria</span></div>
                 <svg className="pointer-events-none absolute inset-0 z-[25] h-full w-full" width="3300" height={lanes.length * LANE_HEIGHT + 56} aria-label="Conectores editáveis do fluxo">
-                  <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L0,8 L8,4 Z" fill="#4A90E2" /></marker></defs>
+                  <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L0,8 L8,4 Z" fill="#111827" /></marker><marker id="open-arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M1,1 L8,5 L1,9" fill="none" stroke="#111827" strokeWidth="1.5" /></marker></defs>
                   {model.edges.map(edge => {
                     const source = model.nodes.find(node => node.id === edge.sourceId);
                     const target = model.nodes.find(node => node.id === edge.targetId);
@@ -539,7 +647,7 @@ export default function FlowEditor() {
                     const x1 = source.x + NODE_WIDTH;
                     const x2 = target.x;
                     const mid = Math.round((x1 + x2) / 2);
-                    return <g key={edge.id} className="pointer-events-auto cursor-pointer" onClick={event => { event.stopPropagation(); setSelectedEdgeId(edge.id); setSelectedNodeId(null); }}><path d={`M ${x1} ${y1} H ${mid} V ${y2} H ${x2}`} fill="none" stroke={selectedEdgeId === edge.id ? "#1F4788" : edge.type === "message" ? "#687385" : edge.type === "association" ? "#9CA3AF" : "#4A90E2"} strokeWidth={selectedEdgeId === edge.id ? "4" : "2"} strokeDasharray={edge.type === "message" ? "8 6" : edge.type === "association" ? "4 5" : undefined} markerEnd="url(#arrow)" /><text x={mid} y={Math.min(y1, y2) - 7} textAnchor="middle" fontSize="12" fill="#516070">{edge.label}</text></g>;
+                    return <g key={edge.id} className="pointer-events-auto cursor-pointer" onClick={event => { event.stopPropagation(); setSelectedEdgeId(edge.id); setSelectedNodeId(null); }}>{edge.type === "message" && <circle cx={x1 + 4} cy={y1} r="4" fill="white" stroke="#111827" strokeWidth="1.5" />}<path d={`M ${x1} ${y1} H ${mid} V ${y2} H ${x2}`} fill="none" stroke="#111827" strokeWidth={selectedEdgeId === edge.id ? "4" : "2"} strokeDasharray={edge.type === "message" ? "8 6" : edge.type === "association" ? "4 5" : undefined} markerEnd={edge.type === "association" ? "url(#open-arrow)" : "url(#arrow)"} /><text x={mid} y={Math.min(y1, y2) - 7} textAnchor="middle" fontSize="12" fill="#516070">{edge.label}</text></g>;
                   })}
                 </svg>
                 {lanes.map((lane, index) => {
@@ -552,10 +660,11 @@ export default function FlowEditor() {
                       {!isAdmin && <GripVertical className="h-4 w-4 opacity-80" />}<span className="truncate">{isAdmin ? "1. " : ""}{lane.label}</span>{isCisi && <Badge className="ml-auto bg-white/20 text-[10px] text-white hover:bg-white/20">FOCAL</Badge>}
                     </div>}
                     {lane.poolId === "externo" && <div className="absolute left-3 top-10 flex w-[360px] items-center gap-2 rounded-lg bg-[#687385] px-3 py-2 text-xs font-semibold text-white"><span className="truncate">{lane.label}</span></div>}
-                    {laneNodes.map(node => <button key={node.id} draggable onDragStart={event => { setDraggedNodeId(node.id); event.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => setDraggedNodeId(null)} onClick={() => { setSelectedNodeId(node.id); setSelectedEdgeId(null); }} className={`absolute ${lane.poolId === "externo" ? "top-[58px]" : "top-[48px]"} z-30 flex cursor-grab items-center justify-center border-2 px-3 text-center text-xs font-medium leading-snug shadow-sm transition hover:-translate-y-0.5 hover:shadow-md active:cursor-grabbing ${nodeClass(node)} ${selectedNodeId === node.id ? "ring-4 ring-[#87CEEB]/70" : ""}`} style={{ left: node.x }}><span className="line-clamp-3">{node.nodeType === "parallelGateway" && <span className="mb-1 block text-lg font-bold leading-none text-yellow-700">+</span>}{node.nodeType === "gateway" && <span className="mb-1 block text-lg font-bold leading-none text-amber-700">×</span>}{node.requiresValidation && <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-red-600">[A VALIDAR]</span>}{node.label.replace("[A VALIDAR]", "")}</span></button>)}
+                    {laneNodes.map(node => <button key={node.id} draggable={canEdit} onDragStart={event => { setDraggedNodeId(node.id); event.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => setDraggedNodeId(null)} onClick={() => { setSelectedNodeId(node.id); setSelectedEdgeId(null); }} className={`absolute ${lane.poolId === "externo" ? "top-[58px]" : "top-[48px]"} z-30 flex items-center justify-center border-2 px-3 text-center text-xs font-medium leading-snug shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${canEdit ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} ${nodeClass(node)} ${selectedNodeId === node.id ? "ring-4 ring-[#87CEEB]/70" : ""}`} style={{ left: node.x }}><span className={`line-clamp-3 ${["gateway", "parallelGateway", "inclusiveGateway", "eventGateway"].includes(node.nodeType) ? "-rotate-45 w-[112px]" : ""}`}>{node.nodeType === "parallelGateway" && <span className="mb-1 block text-lg font-bold leading-none text-green-700">+</span>}{node.nodeType === "gateway" && <span className="mb-1 block text-lg font-bold leading-none text-amber-700">×</span>}{node.nodeType === "inclusiveGateway" && <span className="mb-1 block text-lg font-bold leading-none text-amber-800">○</span>}{node.nodeType === "eventGateway" && <span className="mb-1 block text-lg font-bold leading-none text-amber-800">◎</span>}{node.nodeType === "subprocess" && <span className="mb-1 block text-sm font-bold leading-none text-[#1F4788]">⊞</span>}{node.requiresValidation && <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-red-600">[A VALIDAR]</span>}{node.label.replace("[A VALIDAR]", "")}</span></button>)}
                   </div>;
                 })}
                 <div className="absolute bottom-5 left-5 z-30 w-[760px] rounded-xl border border-slate-300 bg-white/95 p-4 shadow-sm backdrop-blur"><div className="mb-3 flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[#1F4788]" /><h3 className="text-sm font-bold tracking-wide text-[#1F4788]">LEGENDA — BPMN 2.0</h3></div><div className="grid grid-cols-2 gap-x-7 gap-y-2 text-xs text-slate-700"><div className="flex items-center gap-2"><span className="h-5 w-5 rounded-full border-2 border-lime-600 bg-lime-200" />Evento de início</div><div className="flex items-center gap-2"><span className="h-5 w-5 rounded-full border-2 border-red-600 bg-red-200" />Evento de fim</div><div className="flex items-center gap-2"><span className="h-5 w-7 rounded-md border-2 border-[#4A90E2] bg-white" />Tarefa / atividade</div><div className="flex items-center gap-2"><span className="h-5 w-7 rounded-md border-2 border-violet-400 bg-violet-50" />Tarefa de decisão / deliberação</div><div className="flex items-center gap-2"><span className="flex h-6 w-6 items-center justify-center rotate-45 border-2 border-amber-500 bg-amber-50 text-sm text-amber-800"><span className="-rotate-45">×</span></span>Gateway exclusivo (XOR)</div><div className="flex items-center gap-2"><span className="flex h-6 w-6 items-center justify-center rotate-45 border-2 border-yellow-600 bg-yellow-50 text-sm text-yellow-800"><span className="-rotate-45">+</span></span>Gateway paralelo (AND)</div><div className="flex items-center gap-2"><span className="w-8 border-t-2 border-[#1F4788]" />Fluxo de sequência</div><div className="flex items-center gap-2"><span className="w-8 border-t-2 border-dashed border-slate-600" />Fluxo de mensagem</div><div className="flex items-center gap-2"><span className="h-6 w-5 rounded-sm border-2 border-slate-500 bg-white" />Objeto de dados</div><div className="flex items-center gap-2"><span className="h-6 w-7 rounded-md border-2 border-amber-300 bg-amber-50" />Anotação / observação</div><div className="flex items-center gap-2"><span className="w-8 border-t-2 border-dashed border-slate-400" />Associação / anotação</div></div></div>
+              </div>
               </div>
             </div>
           </ScrollArea>
@@ -566,20 +675,20 @@ export default function FlowEditor() {
             <TabsList className="m-3 grid grid-cols-3 bg-slate-100"><TabsTrigger value="properties"><Settings2 className="mr-1 h-3.5 w-3.5" />Propr.</TabsTrigger><TabsTrigger value="review"><MessageSquare className="mr-1 h-3.5 w-3.5" />Revisão</TabsTrigger><TabsTrigger value="history"><History className="mr-1 h-3.5 w-3.5" />Histórico</TabsTrigger></TabsList>
             <TabsContent value="properties" className="mt-0 min-h-0 flex-1"><ScrollArea className="h-[calc(100vh-8.5rem)] px-4 pb-5">
               {selectedNode ? <div className="space-y-4"><div className="flex items-center justify-between"><div><p className="text-xs font-semibold uppercase tracking-wide text-[#4A90E2]">Elemento selecionado</p><h3 className="font-semibold">{nodeTypeLabels[selectedNode.nodeType]}</h3></div><Button size="icon" variant="ghost" onClick={removeSelected}><X className="h-4 w-4" /></Button></div>
-                <div className="space-y-2"><Label>Rótulo</Label><Textarea value={selectedNode.label} onChange={event => updateNode({ label: event.target.value })} /></div>
+                <div className="space-y-2"><Label>Rótulo</Label><Textarea value={selectedNode.label} disabled={!canEdit} onChange={event => updateNode({ label: event.target.value })} /></div>
                 <div className="grid grid-cols-2 gap-3"><div className="space-y-2"><Label>Tipo</Label><Select value={selectedNode.nodeType} onValueChange={value => updateNode({ nodeType: value as FlowNodeType })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{Object.entries(nodeTypeLabels).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label>Nível</Label><Select value={selectedNode.level ?? "none"} onValueChange={value => updateNode({ level: value === "none" ? null : value as FlowLevel })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">Não aplicável</SelectItem><SelectItem value="N0">N0</SelectItem><SelectItem value="N1">N1</SelectItem><SelectItem value="N2">N2</SelectItem><SelectItem value="N3">N3</SelectItem></SelectContent></Select></div></div>
-                <div className="space-y-2"><Label>Responsável</Label><Input value={selectedNode.responsible} onChange={event => updateNode({ responsible: event.target.value })} /></div>
-                <div className="space-y-2"><Label>Observações</Label><Textarea value={selectedNode.notes} onChange={event => updateNode({ notes: event.target.value })} /></div>
-                {selectedNode.nodeType === "gateway" && <div className="space-y-2"><Label>Condições de saída</Label><Input value={selectedNode.gatewayCondition} onChange={event => updateNode({ gatewayCondition: event.target.value })} placeholder="SIM / NÃO ou N0 / N1 / N2 / N3" /></div>}
-                <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><input type="checkbox" checked={selectedNode.requiresValidation} onChange={event => { const required = event.target.checked; updateNode({ requiresValidation: required, label: required && !selectedNode.label.includes("[A VALIDAR]") ? `${selectedNode.label} [A VALIDAR]` : !required ? selectedNode.label.replace(" [A VALIDAR]", "") : selectedNode.label }); }} />Campo depende de validação institucional</label>
+                <div className="space-y-2"><Label>Responsável</Label><Input value={selectedNode.responsible} disabled={!canEdit} onChange={event => updateNode({ responsible: event.target.value })} /></div>
+                <div className="space-y-2"><Label>Observações</Label><Textarea value={selectedNode.notes} disabled={!canEdit} onChange={event => updateNode({ notes: event.target.value })} /></div>
+                {["gateway", "parallelGateway", "inclusiveGateway", "eventGateway"].includes(selectedNode.nodeType) && <div className="space-y-2"><Label>Condições de saída</Label><Input value={selectedNode.gatewayCondition} disabled={!canEdit} onChange={event => updateNode({ gatewayCondition: event.target.value })} placeholder="SIM / NÃO ou N0 / N1 / N2 / N3" /></div>}
+                <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><input type="checkbox" disabled={!canEdit} checked={selectedNode.requiresValidation} onChange={event => { const required = event.target.checked; updateNode({ requiresValidation: required, label: required && !selectedNode.label.includes("[A VALIDAR]") ? `${selectedNode.label} [A VALIDAR]` : !required ? selectedNode.label.replace(" [A VALIDAR]", "") : selectedNode.label }); }} />Campo depende de validação institucional</label>
               </div> : selectedEdge ? <div className="space-y-4"><div className="flex items-center justify-between"><div><p className="text-xs font-semibold uppercase tracking-wide text-[#4A90E2]">Conector selecionado</p><h3 className="font-semibold">Ligação BPMN</h3></div><Button size="icon" variant="ghost" onClick={removeSelected}><X className="h-4 w-4" /></Button></div><div className="space-y-2"><Label>Origem</Label><Select value={selectedEdge.sourceId} onValueChange={value => updateEdge({ sourceId: value })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{model.nodes.map(node => <SelectItem key={node.id} value={node.id}>{node.label.slice(0, 44)}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label>Destino</Label><Select value={selectedEdge.targetId} onValueChange={value => updateEdge({ targetId: value })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{model.nodes.map(node => <SelectItem key={node.id} value={node.id}>{node.label.slice(0, 44)}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label>Tipo</Label><Select value={selectedEdge.type} onValueChange={value => updateEdge({ type: value as FlowEdge["type"] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="sequence">Fluxo de sequência</SelectItem><SelectItem value="message">Fluxo de mensagem</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label>Rótulo da conexão</Label><Input value={selectedEdge.label} onChange={event => updateEdge({ label: event.target.value })} /></div></div> : <div className="rounded-xl border border-dashed border-slate-300 p-5 text-center text-sm text-slate-500"><Settings2 className="mx-auto mb-3 h-6 w-6 text-slate-400" />Selecione uma ação, decisão, dado ou conexão para editar suas propriedades.</div>}
             </ScrollArea></TabsContent>
             <TabsContent value="review" className="mt-0 min-h-0 flex-1"><ScrollArea className="h-[calc(100vh-8.5rem)] px-4 pb-5"><div className="space-y-4"><div><p className="text-xs font-semibold uppercase tracking-wide text-[#4A90E2]">Validações automáticas</p><h3 className="font-semibold">Regras de coerência BPMN</h3></div>{issues.length === 0 ? <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800"><CheckCircle2 className="mb-2 h-5 w-5" />Não há inconsistências detectadas no modelo atual.</div> : <div className="space-y-2">{issues.map(issue => <button key={issue.id} className={`w-full rounded-lg border p-3 text-left text-sm ${severityStyle(issue.severity)}`} onClick={() => { if (issue.nodeId) { setSelectedNodeId(issue.nodeId); setSelectedEdgeId(null); } if (issue.edgeId) { setSelectedEdgeId(issue.edgeId); setSelectedNodeId(null); } }}><div className="flex items-start gap-2"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><span>{issue.message}</span></div></button>)}</div>}
                 <Separator />
-                <div><p className="text-xs font-semibold uppercase tracking-wide text-[#4A90E2]">Comentário de revisão</p><p className="mt-1 text-sm text-slate-500">Vinculado ao elemento selecionado quando houver seleção.</p></div><Textarea value={commentText} onChange={event => setCommentText(event.target.value)} placeholder="Descreva o ajuste ou a dúvida institucional…" /><Button className="w-full" onClick={submitComment} disabled={addCommentMutation.isPending}><MessageSquare className="mr-2 h-4 w-4" />Registrar comentário</Button>
-                <div className="space-y-2">{commentsQuery.data?.map(comment => <div key={comment.id} className="rounded-lg border border-slate-200 p-3"><div className="mb-2 flex items-center justify-between"><Badge variant="outline" className={comment.status === "resolved" ? "border-emerald-200 text-emerald-700" : "border-amber-200 text-amber-700"}>{comment.status === "resolved" ? "Resolvido" : "Aberto"}</Badge>{comment.status === "open" && <Button size="sm" variant="ghost" onClick={() => resolveCommentMutation.mutate({ commentId: comment.id }, { onSuccess: () => { if (flowId) utils.flow.comments.invalidate({ flowId }); } })}>Resolver</Button>}</div><p className="text-sm leading-relaxed text-slate-700">{comment.content}</p></div>)}</div>
+                <div><p className="text-xs font-semibold uppercase tracking-wide text-[#4A90E2]">Comentário de revisão</p><p className="mt-1 text-sm text-slate-500">Vinculado ao elemento selecionado quando houver seleção. Anexe fontes, pareceres ou evidências com até 5 MB cada.</p></div><Textarea value={commentText} disabled={!canComment} onChange={event => setCommentText(event.target.value)} placeholder="Descreva o ajuste ou a dúvida institucional…" /><input ref={commentAttachmentInputRef} type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.md,.csv,.xml,.bpmn" className="hidden" onChange={addCommentAttachments} /><div className="flex gap-2"><Button variant="outline" className="flex-1" disabled={!canComment} onClick={() => commentAttachmentInputRef.current?.click()}><Paperclip className="mr-2 h-4 w-4" />Anexar</Button><Button className="flex-1" onClick={submitComment} disabled={!canComment || isPreparingComment || addCommentMutation.isPending || commentText.trim().length < 2}><MessageSquare className="mr-2 h-4 w-4" />{isPreparingComment ? "Preparando…" : "Registrar"}</Button></div>{commentAttachments.length > 0 && <div className="space-y-1 rounded-lg border border-slate-200 bg-slate-50 p-2">{commentAttachments.map((file, index) => <div key={`${file.name}-${index}`} className="flex items-center justify-between gap-2 text-xs text-slate-700"><span className="truncate">{file.name}</span><button className="text-slate-400 hover:text-red-600" onClick={() => setCommentAttachments(current => current.filter((_, fileIndex) => fileIndex !== index))}><X className="h-3.5 w-3.5" /></button></div>)}</div>}
+                <div className="space-y-2">{commentsQuery.data?.map(comment => <div key={comment.id} className="rounded-lg border border-slate-200 p-3"><div className="mb-2 flex items-center justify-between"><Badge variant="outline" className={comment.status === "resolved" ? "border-emerald-200 text-emerald-700" : "border-amber-200 text-amber-700"}>{comment.status === "resolved" ? "Resolvido" : "Aberto"}</Badge>{comment.status === "open" && <Button size="sm" variant="ghost" disabled={!canComment} onClick={() => resolveCommentMutation.mutate({ commentId: comment.id }, { onSuccess: () => { if (flowId) utils.flow.comments.invalidate({ flowId }); } })}>Resolver</Button>}</div><p className="text-sm leading-relaxed text-slate-700">{comment.content}</p>{comment.attachments?.length > 0 && <div className="mt-3 space-y-1">{comment.attachments.map(attachment => <a key={attachment.id} href={attachment.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-md bg-slate-50 px-2 py-1.5 text-xs font-medium text-[#1F4788] hover:bg-blue-50"><Paperclip className="h-3.5 w-3.5" />{attachment.filename}</a>)}</div>}</div>)}</div>
               </div></ScrollArea></TabsContent>
-            <TabsContent value="history" className="mt-0 min-h-0 flex-1"><ScrollArea className="h-[calc(100vh-8.5rem)] px-4 pb-5"><div className="space-y-4"><div><p className="text-xs font-semibold uppercase tracking-wide text-[#4A90E2]">Controle de versão</p><h3 className="font-semibold">Histórico persistente</h3><p className="mt-1 text-sm text-slate-500">Depois de importar ou editar, registre uma versão para manter o estado recuperável.</p></div>{hasUnregisteredChanges && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><b>Alterações não registradas.</b> O estado atual pode ser salvo como nova versão; versões anteriores continuam preservadas.</div>}<div className="space-y-2"><Label>Status da próxima versão</Label><Select value={status} onValueChange={value => setStatus(value as keyof typeof statusLabels)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{Object.entries(statusLabels).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label>Resumo da alteração</Label><Textarea value={changeSummary} onChange={event => setChangeSummary(event.target.value)} /></div><Button className="w-full bg-[#1F4788] hover:bg-[#16396f]" onClick={saveVersion}><Save className="mr-2 h-4 w-4" />Registrar nova versão</Button>{comparison && <div className="rounded-xl border border-blue-200 bg-blue-50 p-3"><p className="text-sm font-semibold text-[#1F4788]">Comparação com versão selecionada</p><div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs text-slate-700"><div><b>{comparison.addedNodes.length}</b><br />novas</div><div><b>{comparison.changedNodes.length}</b><br />alteradas</div><div><b>{comparison.removedNodes.length}</b><br />removidas</div></div><Button size="sm" variant="ghost" className="mt-2 w-full" onClick={() => setCompareVersionId(null)}>Limpar comparação</Button></div>}<Separator />{versionsQuery.data?.map(version => <div key={version.id} className={`rounded-xl border p-3 ${compareVersionId === version.id ? "border-[#4A90E2] bg-blue-50" : "border-slate-200"}`}><div className="flex items-center justify-between"><span className="font-semibold text-[#1F4788]">Versão {version.versionNumber}</span><Badge variant="outline">{statusLabels[version.status]}</Badge></div><p className="mt-2 text-sm text-slate-600">{version.changeSummary}</p><p className="mt-2 text-xs text-slate-400">{new Date(version.createdAt).toLocaleString("pt-BR")}</p><div className="mt-3 grid grid-cols-2 gap-2"><Button size="sm" variant="outline" onClick={() => setCompareVersionId(version.id)}>Comparar</Button><Button size="sm" variant="outline" onClick={() => restore(version.id)} disabled={restoreMutation.isPending}><Undo2 className="mr-1 h-3.5 w-3.5" />Restaurar</Button></div></div>)}</div></ScrollArea></TabsContent>
+            <TabsContent value="history" className="mt-0 min-h-0 flex-1"><ScrollArea className="h-[calc(100vh-8.5rem)] px-4 pb-5"><div className="space-y-4"><div><p className="text-xs font-semibold uppercase tracking-wide text-[#4A90E2]">Controle de versão</p><h3 className="font-semibold">Histórico persistente</h3><p className="mt-1 text-sm text-slate-500">Depois de importar ou editar, registre uma versão para manter o estado recuperável.</p></div>{hasUnregisteredChanges && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><b>Alterações não registradas.</b> O estado atual pode ser salvo como nova versão; versões anteriores continuam preservadas.</div>}<div className="space-y-2"><Label>Status da próxima versão</Label><Select value={status} onValueChange={value => setStatus(value as keyof typeof statusLabels)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{Object.entries(statusLabels).filter(([value]) => canApprove || (value !== "approved" && value !== "archived")).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label>Resumo da alteração</Label><Textarea value={changeSummary} disabled={!canEdit && !canApprove} onChange={event => setChangeSummary(event.target.value)} /></div><Button className="w-full bg-[#1F4788] hover:bg-[#16396f]" onClick={saveVersion} disabled={saveMutation.isPending || (!canEdit && !(canApprove && (status === "approved" || status === "archived")))}><Save className="mr-2 h-4 w-4" />{status === "approved" ? "Aprovar versão" : "Registrar nova versão"}</Button>{comparison && <div className="rounded-xl border border-blue-200 bg-blue-50 p-3"><p className="text-sm font-semibold text-[#1F4788]">Comparação com versão selecionada</p><div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs text-slate-700"><div><b>{comparison.addedNodes.length}</b><br />novas</div><div><b>{comparison.changedNodes.length}</b><br />alteradas</div><div><b>{comparison.removedNodes.length}</b><br />removidas</div></div><Button size="sm" variant="ghost" className="mt-2 w-full" onClick={() => setCompareVersionId(null)}>Limpar comparação</Button></div>}<Separator />{versionsQuery.data?.map(version => <div key={version.id} className={`rounded-xl border p-3 ${compareVersionId === version.id ? "border-[#4A90E2] bg-blue-50" : "border-slate-200"}`}><div className="flex items-center justify-between"><span className="font-semibold text-[#1F4788]">Versão {version.versionNumber}</span><Badge variant="outline">{statusLabels[version.status]}</Badge></div><p className="mt-2 text-sm text-slate-600">{version.changeSummary}</p><p className="mt-2 text-xs text-slate-400">{new Date(version.createdAt).toLocaleString("pt-BR")}</p><div className="mt-3 grid grid-cols-2 gap-2"><Button size="sm" variant="outline" onClick={() => setCompareVersionId(version.id)}>Comparar</Button><Button size="sm" variant="outline" onClick={() => restore(version.id)} disabled={restoreMutation.isPending || !canEdit}><Undo2 className="mr-1 h-3.5 w-3.5" />Restaurar</Button></div></div>)}{canManageUsers && <><Separator /><div><p className="text-xs font-semibold uppercase tracking-wide text-[#4A90E2]">Perfis institucionais</p><p className="mt-1 text-sm text-slate-500">Administradores definem quem revisa, aprova ou edita o fluxo.</p></div><div className="space-y-2">{usersQuery.data?.map(member => <div key={member.id} className="rounded-lg border border-slate-200 p-2"><p className="truncate text-xs font-semibold text-slate-700">{member.name || member.email || `Usuário ${member.id}`}</p><Select value={member.role} onValueChange={value => updateUserRoleMutation.mutate({ userId: member.id, role: value as "user" | "revisor" | "aprovador" | "admin" }, { onSuccess: () => { usersQuery.refetch(); toast.success("Perfil institucional atualizado."); }, onError: error => toast.error(error.message) })}><SelectTrigger className="mt-2 h-8 text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="user">Editor</SelectItem><SelectItem value="revisor">Revisor</SelectItem><SelectItem value="aprovador">Aprovador</SelectItem><SelectItem value="admin">Administrador</SelectItem></SelectContent></Select></div>)}</div></>}</div></ScrollArea></TabsContent>
           </Tabs>
         </aside>
       </main>

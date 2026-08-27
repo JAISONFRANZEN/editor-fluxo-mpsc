@@ -26,3 +26,12 @@
 - [x] Destacar o registro de versões após importação ou edição e facilitar a restauração de estados anteriores.
 - [x] Acrescentar uma legenda BPMN 2.0 completa ao canvas e às exportações de apresentação.
 - [x] Verificar a exportação .bpmn diretamente a partir do fluxo revisado e testar a legibilidade da legenda.
+- [x] Adicionar régua de zoom ao canvas com aumentar, diminuir, ajuste e percentual atual.
+- [x] Permitir anexos seguros e persistentes vinculados aos comentários de revisão.
+- [x] Criar perfis de revisor e aprovador com permissões distintas para comentário, salvamento e aprovação.
+- [x] Testar permissões, armazenamento de anexos, zoom e aprovação na interface.
+- [x] Permitir arrastar um elemento BPMN da paleta ao ponto desejado do canvas e abrir sua edição imediata.
+- [x] Preservar a posição de inserção ao criar e salvar elementos arrastados.
+- [x] Testar a criação por arrastar e soltar entre baias e no Pool de órgãos externos.
+- [x] Corrigir cores, símbolos e conectores da legenda BPMN conforme a especificação visual fornecida.
+- [x] Acrescentar ao editor os elementos estruturais e avançados BPMN aplicáveis à construção dos fluxos.

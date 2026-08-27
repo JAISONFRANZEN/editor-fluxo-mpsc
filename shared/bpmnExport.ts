@@ -22,10 +22,15 @@ function nodeXml(node: FlowNode) {
   const id = safeId(node.id);
   const name = escapeXml(node.label);
   if (node.nodeType === "start") return `<bpmn:startEvent id="${id}" name="${name}" />`;
+  if (node.nodeType === "intermediate") return `<bpmn:intermediateCatchEvent id="${id}" name="${name}" />`;
   if (node.nodeType === "end") return `<bpmn:endEvent id="${id}" name="${name}" />`;
   if (node.nodeType === "gateway") return `<bpmn:exclusiveGateway id="${id}" name="${name}" gatewayDirection="Diverging" />`;
   if (node.nodeType === "parallelGateway") return `<bpmn:parallelGateway id="${id}" name="${name}" gatewayDirection="Diverging" />`;
+  if (node.nodeType === "inclusiveGateway") return `<bpmn:inclusiveGateway id="${id}" name="${name}" gatewayDirection="Diverging" />`;
+  if (node.nodeType === "eventGateway") return `<bpmn:eventBasedGateway id="${id}" name="${name}" gatewayDirection="Diverging" />`;
+  if (node.nodeType === "subprocess") return `<bpmn:subProcess id="${id}" name="${name}" />`;
   if (node.nodeType === "data") return `<bpmn:dataObject id="DataObject_${id}" /><bpmn:dataObjectReference id="${id}" name="${name}" dataObjectRef="DataObject_${id}" />`;
+  if (node.nodeType === "dataStore") return `<bpmn:dataStore id="DataStore_${id}" name="${name}" /><bpmn:dataStoreReference id="${id}" name="${name}" dataStoreRef="DataStore_${id}" />`;
   if (node.nodeType === "annotation") return `<bpmn:textAnnotation id="${id}"><bpmn:text>${name}</bpmn:text></bpmn:textAnnotation>`;
   return `<bpmn:task id="${id}" name="${name}" />`;
 }
@@ -40,9 +45,9 @@ function edgeXml(edge: FlowEdge) {
 function nodeBounds(node: FlowNode, lanes: FlowLane[]) {
   const laneIndex = Math.max(0, lanes.findIndex(lane => lane.id === node.laneId));
   const y = 85 + laneIndex * LANE_HEIGHT + 48;
-  if (node.nodeType === "gateway" || node.nodeType === "parallelGateway") return { x: node.x, y: y - 8, width: 82, height: 82 };
-  if (node.nodeType === "start" || node.nodeType === "end") return { x: node.x, y: y + 2, width: NODE_WIDTH, height: 54 };
-  return { x: node.x, y, width: NODE_WIDTH, height: node.nodeType === "data" ? 62 : NODE_HEIGHT };
+  if (["gateway", "parallelGateway", "inclusiveGateway", "eventGateway"].includes(node.nodeType)) return { x: node.x, y: y - 8, width: 82, height: 82 };
+  if (["start", "intermediate", "end"].includes(node.nodeType)) return { x: node.x, y: y + 2, width: NODE_WIDTH, height: 54 };
+  return { x: node.x, y, width: NODE_WIDTH, height: ["data", "dataStore"].includes(node.nodeType) ? 62 : NODE_HEIGHT };
 }
 
 /** Exports the current editor model as portable BPMN 2.0 XML suitable for import testing in Bizagi. */
@@ -64,7 +69,7 @@ export function buildBpmnXml(model: FlowModel) {
       return source && target && laneById.get(source.laneId)?.poolId === pool.id && laneById.get(target.laneId)?.poolId === pool.id;
     });
     const laneSet = localLanes.map(lane => {
-      const flowNodeRefs = localNodes.filter(node => node.laneId === lane.id && node.nodeType !== "data" && node.nodeType !== "annotation").map(node => `<bpmn:flowNodeRef>${safeId(node.id)}</bpmn:flowNodeRef>`).join("");
+      const flowNodeRefs = localNodes.filter(node => node.laneId === lane.id && !["data", "dataStore", "annotation"].includes(node.nodeType)).map(node => `<bpmn:flowNodeRef>${safeId(node.id)}</bpmn:flowNodeRef>`).join("");
       return `<bpmn:lane id="${safeId(lane.id)}" name="${escapeXml(lane.label)}">${flowNodeRefs}</bpmn:lane>`;
     }).join("");
     return `<bpmn:process id="${processByPool.get(pool.id)}" name="${escapeXml(pool.label)}" isExecutable="false"><bpmn:laneSet id="LaneSet_${safeId(pool.id)}">${laneSet}</bpmn:laneSet>${localNodes.map(nodeXml).join("")}${localEdges.map(edgeXml).join("")}</bpmn:process>`;
@@ -94,8 +99,8 @@ export function buildBpmnXml(model: FlowModel) {
     const pool = poolBounds.get(lane.poolId)!;
     const localIndex = lanes.filter(item => item.poolId === lane.poolId).findIndex(item => item.id === node.laneId);
     const y = pool.y + 30 + localIndex * LANE_HEIGHT + 34;
-    const height = node.nodeType === "gateway" || node.nodeType === "parallelGateway" ? 82 : node.nodeType === "data" ? 62 : node.nodeType === "start" || node.nodeType === "end" ? 54 : NODE_HEIGHT;
-    const width = node.nodeType === "gateway" || node.nodeType === "parallelGateway" ? 82 : NODE_WIDTH;
+    const height = ["gateway", "parallelGateway", "inclusiveGateway", "eventGateway"].includes(node.nodeType) ? 82 : ["data", "dataStore"].includes(node.nodeType) ? 62 : ["start", "intermediate", "end"].includes(node.nodeType) ? 54 : NODE_HEIGHT;
+    const width = ["gateway", "parallelGateway", "inclusiveGateway", "eventGateway"].includes(node.nodeType) ? 82 : NODE_WIDTH;
     return `<bpmndi:BPMNShape id="Shape_${safeId(node.id)}" bpmnElement="${safeId(node.id)}"><dc:Bounds x="${Math.max(80, bounds.x)}" y="${y}" width="${width}" height="${height}" /></bpmndi:BPMNShape>`;
   }).join("");
   const edgeShapes = model.edges.map(edge => {
