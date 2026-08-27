@@ -10,6 +10,7 @@ import { sanitizeAttachmentFilename, validateCommentAttachment } from "../shared
 import { canSaveStatus, rolePermissions } from "../shared/flowAccess";
 import { inferConnectionType } from "../shared/edgeRules";
 import { buildInstitutionalInfographicPrompt } from "../shared/infographicPrompt";
+import { filterFlowNodes, listFlowResponsibles } from "../shared/flowFilters";
 
 describe("regras de validação do fluxo BPMN", () => {
   it("aceita o fluxo-base com a Administração Superior na primeira baia", () => {
@@ -133,6 +134,16 @@ describe("regras de validação do fluxo BPMN", () => {
     expect(prompt).toContain("CISI — ponto focal técnico-operacional interno");
     expect(prompt).toContain("[A VALIDAR]");
     expect(prompt).toContain("Não inventar telefones");
+  });
+
+  it("filtra o canvas por nível e responsável sem alterar o modelo original", () => {
+    const model = createDefaultFlowModel();
+    const selected = filterFlowNodes(model.nodes, { level: "N3", responsible: "all" });
+    expect(selected.map(node => node.id)).toContain("n3");
+    expect(selected.every(node => node.level === "N3")).toBe(true);
+    expect(filterFlowNodes(model.nodes, { level: "all", responsible: "Promotor de Justiça" }).length).toBeGreaterThan(1);
+    expect(listFlowResponsibles(model)).toContain("CISI");
+    expect(model.nodes).toHaveLength(19);
   });
 
   it("exporta os elementos avançados da legenda BPMN", () => {

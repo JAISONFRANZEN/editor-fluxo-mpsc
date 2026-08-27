@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { createDefaultFlowModel, validateFlowModel, type FlowModel } from "../../shared/flowModel";
-import { addComment, createFlow, getAccessibleFlow, getLatestFlow, listComments, listInstitutionalUsers, listVersions, resolveComment, restoreVersion, saveFlowVersion, updateInstitutionalRole, type FlowActor, type FlowStatus } from "../flowDb";
+import { addComment, createFlow, getAccessibleFlow, getLatestFlow, listComments, listFlowAuditEvents, listInstitutionalUsers, listVersions, resolveComment, restoreVersion, saveFlowVersion, updateInstitutionalRole, type FlowActor, type FlowStatus } from "../flowDb";
 import { rolePermissions, type InstitutionalRole } from "../../shared/flowAccess";
 import { protectedProcedure, router } from "../_core/trpc";
 import { TRPCError } from "@trpc/server";
@@ -43,6 +43,7 @@ export const flowRouter = router({
     return saveFlowVersion({ flowId: input.flowId, actor: actorFrom(ctx.user), model: input.model as FlowModel, status: input.status as FlowStatus, summary: input.summary });
   }),
   versions: protectedProcedure.input(z.object({ flowId: z.number() })).query(async ({ ctx, input }) => listVersions(input.flowId, actorFrom(ctx.user))),
+  audit: protectedProcedure.input(z.object({ flowId: z.number().int().positive() })).query(async ({ ctx, input }) => listFlowAuditEvents(input.flowId, actorFrom(ctx.user))),
   restore: protectedProcedure.input(z.object({ flowId: z.number(), versionId: z.number() })).mutation(async ({ ctx, input }) => restoreVersion(input.flowId, input.versionId, actorFrom(ctx.user))),
   comments: protectedProcedure.input(z.object({ flowId: z.number() })).query(async ({ ctx, input }) => listComments(input.flowId, actorFrom(ctx.user))),
   addComment: protectedProcedure.input(z.object({ flowId: z.number().int().positive(), elementId: idSchema.optional(), content: z.string().min(2).max(4000), attachments: z.array(attachmentSchema).max(5).default([]) })).mutation(async ({ ctx, input }) =>

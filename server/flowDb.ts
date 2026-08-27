@@ -1,5 +1,5 @@
 import { and, count, desc, eq, inArray } from "drizzle-orm";
-import { flowCommentAttachments, flowComments, flowVersions, protocolFlows, users } from "../drizzle/schema";
+import { flowAuditEvents, flowCommentAttachments, flowComments, flowVersions, protocolFlows, users } from "../drizzle/schema";
 import type { FlowModel } from "../shared/flowModel";
 import { canSaveStatus, rolePermissions, type FlowStatus, type InstitutionalRole } from "../shared/flowAccess";
 import { getDb } from "./db";
@@ -9,6 +9,7 @@ import { MAX_COMMENT_ATTACHMENT_BYTES, MAX_COMMENT_ATTACHMENT_TOTAL_BYTES, sanit
 export type { FlowStatus } from "../shared/flowAccess";
 export type FlowActor = { id: number; role: InstitutionalRole };
 export type CommentAttachmentInput = { filename: string; mimeType: string; size: number; contentBase64: string };
+export type FlowAuditAction = "flow_created" | "version_saved" | "version_restored" | "comment_added" | "comment_resolved";
 
 function canAccessAll(actor: FlowActor) {
   return actor.role === "admin" || actor.role === "revisor" || actor.role === "aprovador";
@@ -16,6 +17,12 @@ function canAccessAll(actor: FlowActor) {
 
 function requirePermission(actor: FlowActor, permission: "comment" | "edit" | "approve" | "manageUsers") {
   if (!rolePermissions[actor.role][permission]) throw new Error("Seu perfil institucional não possui permissão para esta ação.");
+}
+
+async function appendFlowAudit(flowId: number, actorId: number, action: FlowAuditAction, context: Record<string, string | number | boolean | null>) {
+  const db = await getDb();
+  if (!db) throw new Error("Banco de dados indisponível para registrar auditoria.");
+  await db.insert(flowAuditEvents).values({ flowId, actorId, action, context });
 }
 
 export async function getLatestFlow(actor: FlowActor) {
@@ -43,6 +50,7 @@ export async function createFlow(ownerId: number, title: string, model: FlowMode
   const inserted = await db.insert(protocolFlows).values({ ownerId, title, modelJson: model, status: "draft", currentVersion: 1 });
   const flowId = Number(inserted[0].insertId);
   await db.insert(flowVersions).values({ flowId, versionNumber: 1, status: "draft", changeSummary: "Versão inicial do fluxo.", snapshot: model, authorId: ownerId });
+  await appendFlowAudit(flowId, ownerId, "flow_created", { version: 1, status: "draft" });
   return getAccessibleFlow(flowId, { id: ownerId, role: "admin" });
 }
 
@@ -57,6 +65,7 @@ export async function saveFlowVersion(input: { flowId: number; actor: FlowActor;
   const nextVersion = current.currentVersion + 1;
   await db.update(protocolFlows).set({ modelJson: input.model, status: input.status, currentVersion: nextVersion, updatedAt: new Date() }).where(eq(protocolFlows.id, input.flowId));
   await db.insert(flowVersions).values({ flowId: input.flowId, versionNumber: nextVersion, status: input.status, changeSummary: input.summary || "Atualização do fluxo.", snapshot: input.model, authorId: input.actor.id });
+  await appendFlowAudit(input.flowId, input.actor.id, "version_saved", { version: nextVersion, status: input.status, summary: (input.summary || "Atualização do fluxo.").slice(0, 500) });
   return getAccessibleFlow(input.flowId, input.actor);
 }
 
@@ -68,6 +77,14 @@ export async function listVersions(flowId: number, actor: FlowActor) {
   return db.select().from(flowVersions).where(eq(flowVersions.flowId, flowId)).orderBy(desc(flowVersions.versionNumber));
 }
 
+export async function listFlowAuditEvents(flowId: number, actor: FlowActor) {
+  const db = await getDb();
+  if (!db) return [];
+  const flow = await getAccessibleFlow(flowId, actor);
+  if (!flow) return [];
+  return db.select().from(flowAuditEvents).where(eq(flowAuditEvents.flowId, flowId)).orderBy(desc(flowAuditEvents.createdAt)).limit(100);
+}
+
 export async function restoreVersion(flowId: number, versionId: number, actor: FlowActor) {
   const db = await getDb();
   if (!db) throw new Error("Banco de dados indisponível.");
@@ -77,7 +94,9 @@ export async function restoreVersion(flowId: number, versionId: number, actor: F
   const found = await db.select().from(flowVersions).where(and(eq(flowVersions.id, versionId), eq(flowVersions.flowId, flowId))).limit(1);
   const version = found[0];
   if (!version) throw new Error("Versão não encontrada.");
-  return saveFlowVersion({ flowId, actor, model: version.snapshot as FlowModel, status: "draft", summary: `Restauração da versão ${version.versionNumber}.` });
+  const restored = await saveFlowVersion({ flowId, actor, model: version.snapshot as FlowModel, status: "draft", summary: `Restauração da versão ${version.versionNumber}.` });
+  await appendFlowAudit(flowId, actor.id, "version_restored", { restoredVersion: version.versionNumber });
+  return restored;
 }
 
 export async function listComments(flowId: number, actor: FlowActor) {
@@ -112,6 +131,7 @@ export async function addComment(input: { flowId: number; actor: FlowActor; elem
     const stored = await storagePut(`protocolos/${input.flowId}/comentarios/${commentId}/${Date.now()}-${cleanName}`, bytes, attachment.mimeType);
     await db.insert(flowCommentAttachments).values({ commentId, storageKey: stored.key, url: stored.url, filename: attachment.filename.slice(0, 255), mimeType: attachment.mimeType, size: attachment.size, authorId: input.actor.id });
   }
+  await appendFlowAudit(input.flowId, input.actor.id, "comment_added", { commentId, elementId: input.elementId ?? null, attachmentCount: preparedAttachments.length });
   return listComments(input.flowId, input.actor);
 }
 
@@ -124,6 +144,7 @@ export async function resolveComment(commentId: number, actor: FlowActor) {
   const flow = await getAccessibleFlow(comment[0].flowId, actor);
   if (!flow) throw new Error("Comentário não encontrado.");
   await db.update(flowComments).set({ status: "resolved", resolvedAt: new Date() }).where(eq(flowComments.id, commentId));
+  await appendFlowAudit(flow.id, actor.id, "comment_resolved", { commentId });
   return listComments(flow.id, actor);
 }
 

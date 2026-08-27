@@ -70,7 +70,17 @@ export const flowCommentAttachments = mysqlTable("flowCommentAttachments", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
+export const flowAuditEvents = mysqlTable("flowAuditEvents", {
+  id: int("id").autoincrement().primaryKey(),
+  flowId: int("flowId").notNull().references(() => protocolFlows.id),
+  actorId: int("actorId").notNull().references(() => users.id),
+  action: varchar("action", { length: 80 }).notNull(),
+  context: json("context").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
 export type ProtocolFlow = typeof protocolFlows.$inferSelect;
 export type FlowVersion = typeof flowVersions.$inferSelect;
 export type FlowComment = typeof flowComments.$inferSelect;
 export type FlowCommentAttachment = typeof flowCommentAttachments.$inferSelect;
+export type FlowAuditEvent = typeof flowAuditEvents.$inferSelect;

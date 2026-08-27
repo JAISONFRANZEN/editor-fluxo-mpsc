@@ -41,16 +41,17 @@
 - [x] Endurecer upload de anexos com verificação de tamanho real, limite total por comentário e tipos controlados.
 - [x] Proteger a gestão de perfis contra alteração do próprio papel e remoção do último administrador.
 - [x] Adicionar refazer, grade magnética, alinhamento e distribuição de elementos no canvas.
-- [ ] Ampliar validações BPMN para eventos de início/fim, gateways e rótulos de conexão.
-- [ ] Acrescentar avisos de classificação, sigilo e uso institucional no editor.
+- [x] Ampliar validações BPMN para eventos de início/fim, gateways e rótulos de conexão.
+- [x] Acrescentar avisos de classificação, sigilo e uso institucional no editor.
 - [x] Atualizar dependências vulneráveis compatíveis e repetir auditoria de produção.
-- [ ] Validar no navegador as melhorias de segurança, modelagem e interface implementadas.
+- [ ] Validar manualmente no navegador os fluxos críticos das melhorias recentes: refazer, grade/encaixe, modos da paleta, conectores por arraste, filtros, mini-mapa e auditoria.
 - [x] Implementar modo essencial e modo estendido para exibir a paleta BPMN por nível de complexidade.
 - [x] Adicionar refazer por botão e atalhos Ctrl+Y e Ctrl+Shift+Z.
 - [x] Adicionar grade magnética, encaixe e organização automática por baia no canvas.
 - [x] Incluir os marcos de Prevenção/Preparação, Resposta/Coordenação e Recuperação/Aprendizado no canvas e nas exportações visuais, sem alterar o XML BPMN 2.0.
 - [ ] Verificar no navegador a exportação SVG/PDF com os marcos visuais antes de disponibilizá-la para uso institucional.
 - [ ] Validar um arquivo BPMN exportado pelo editor no Bizagi Modeler em ambiente real.
-- [ ] Implementar ligação visual por arraste entre elementos, com âncoras e regras entre Pools.
-- [ ] Acrescentar mini-mapa do canvas, filtros por nível/responsável e trilha de auditoria append-only por fluxo.
+- [x] Implementar ligação visual por arraste entre elementos, com âncoras e regras entre Pools.
+- [x] Concluir trilha de auditoria append-only por fluxo, com atualização dinâmica do painel e teste automatizado da rota de registro/listagem.
+- [x] Adicionar teste automatizado da rota tRPC flow.audit e da integração de registro/listagem da auditoria via router.
 - [x] Adicionar botão que gere, copie e permita revisar um prompt de infográfico institucional de fácil compreensão a partir do fluxo modelado.
