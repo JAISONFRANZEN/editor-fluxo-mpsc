@@ -53,3 +53,4 @@
 - [ ] Validar um arquivo BPMN exportado pelo editor no Bizagi Modeler em ambiente real.
 - [ ] Implementar ligação visual por arraste entre elementos, com âncoras e regras entre Pools.
 - [ ] Acrescentar mini-mapa do canvas, filtros por nível/responsável e trilha de auditoria append-only por fluxo.
+- [x] Adicionar botão que gere, copie e permita revisar um prompt de infográfico institucional de fácil compreensão a partir do fluxo modelado.

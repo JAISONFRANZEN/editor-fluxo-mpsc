@@ -176,6 +176,15 @@ export function validateFlowModel(model: FlowModel): FlowIssue[] {
     if (edge.type === "message" && sourcePool === targetPool) {
       issues.push({ id: `edge-message-${edge.id}`, severity: "warning", message: "Fluxo de mensagem deve conectar participantes de Pools distintos.", edgeId: edge.id });
     }
+    if (target.nodeType === "start") {
+      issues.push({ id: `edge-start-target-${edge.id}`, severity: "error", message: "Evento de início não pode receber conector de entrada.", edgeId: edge.id, nodeId: target.id });
+    }
+    if (source.nodeType === "end") {
+      issues.push({ id: `edge-end-source-${edge.id}`, severity: "error", message: "Evento de fim não pode possuir conector de saída.", edgeId: edge.id, nodeId: source.id });
+    }
+    if (edge.type === "message" && !edge.label.trim()) {
+      issues.push({ id: `message-label-${edge.id}`, severity: "warning", message: "Fluxo de mensagem deve ter rótulo identificável para fins de revisão.", edgeId: edge.id });
+    }
   });
 
   model.nodes.forEach(node => {
@@ -198,6 +207,10 @@ export function validateFlowModel(model: FlowModel): FlowIssue[] {
         issues.push({ id: `gateway-label-${edge.id}`, severity: "error", message: "Saída de gateway deve ter rótulo de condição.", nodeId: gateway.id, edgeId: edge.id });
       }
     });
+    const normalizedLabels = outgoing.map(edge => edge.label.trim().toLocaleLowerCase()).filter(Boolean);
+    if (new Set(normalizedLabels).size !== normalizedLabels.length) {
+      issues.push({ id: `gateway-duplicate-label-${gateway.id}`, severity: "warning", message: "Gateway possui rótulos de saída repetidos; diferencie as condições.", nodeId: gateway.id });
+    }
   });
 
   model.nodes.forEach(node => {

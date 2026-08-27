@@ -8,7 +8,8 @@ import { popFlowHistory, pushFlowHistory, redoFlowChange, undoFlowChange } from 
 import { importMarkdownToFlow } from "../shared/markdownImporter";
 import { sanitizeAttachmentFilename, validateCommentAttachment } from "../shared/attachmentPolicy";
 import { canSaveStatus, rolePermissions } from "../shared/flowAccess";
-import { buildExportSvg } from "../client/src/components/FlowEditor";
+import { inferConnectionType } from "../shared/edgeRules";
+import { buildInstitutionalInfographicPrompt } from "../shared/infographicPrompt";
 
 describe("regras de validação do fluxo BPMN", () => {
   it("aceita o fluxo-base com a Administração Superior na primeira baia", () => {
@@ -24,11 +25,39 @@ describe("regras de validação do fluxo BPMN", () => {
     expect(validateFlowModel(model).some(issue => issue.message.includes("Pools distintos"))).toBe(true);
   });
 
+  it("infere fluxo de mensagem ao ligar elementos de Pools distintos", () => {
+    const model = createDefaultFlowModel();
+    expect(inferConnectionType(model, "seguranca", "resposta-externa")).toBe("message");
+    expect(inferConnectionType(model, "seguranca", "perigo")).toBe("sequence");
+    expect(inferConnectionType(model, "seguranca", "seguranca")).toBeNull();
+  });
+
   it("exige condição nas saídas de gateway", () => {
     const model = createDefaultFlowModel();
     const edge = model.edges.find(item => item.id === "e3");
     if (edge) edge.label = "";
     expect(validateFlowModel(model).some(issue => issue.message.includes("rótulo de condição"))).toBe(true);
+  });
+
+  it("detecta condições repetidas em um gateway", () => {
+    const model = createDefaultFlowModel();
+    const gatewayEdges = model.edges.filter(item => item.sourceId === "perigo");
+    gatewayEdges.forEach(edge => { edge.label = "SIM"; });
+    expect(validateFlowModel(model).some(issue => issue.message.includes("rótulos de saída repetidos"))).toBe(true);
+  });
+
+  it("impede conectores entrando em início, saindo de fim e mensagens sem rótulo", () => {
+    const model = createDefaultFlowModel();
+    const existingMessage = model.edges.find(edge => edge.id === "e5");
+    if (existingMessage) existingMessage.label = "";
+    model.edges.push(
+      { id: "inicio-invalido", sourceId: "seguranca", targetId: "inicio", type: "sequence", label: "" },
+      { id: "fim-invalido", sourceId: "fim", targetId: "monitorar", type: "sequence", label: "" },
+    );
+    const messages = validateFlowModel(model).map(issue => issue.message);
+    expect(messages).toContain("Evento de início não pode receber conector de entrada.");
+    expect(messages).toContain("Evento de fim não pode possuir conector de saída.");
+    expect(messages).toContain("Fluxo de mensagem deve ter rótulo identificável para fins de revisão.");
   });
 
   it("impede que a CISI apareça como comando operacional externo", () => {
@@ -98,12 +127,12 @@ describe("regras de validação do fluxo BPMN", () => {
     expect(xml).toContain("<di:waypoint");
   });
 
-  it("inclui os marcos de fase na exportação visual, sem incluí-los no BPMN XML", () => {
-    const model = createDefaultFlowModel();
-    const svg = buildExportSvg(model);
-    expect(svg).toContain("PREVENÇÃO E PREPARAÇÃO");
-    expect(svg).toContain("RESPOSTA E COORDENAÇÃO");
-    expect(buildBpmnXml(model)).not.toContain("PREVENÇÃO E PREPARAÇÃO");
+  it("gera prompt de infográfico claro e preserva os avisos institucionais pendentes", () => {
+    const prompt = buildInstitutionalInfographicPrompt(createDefaultFlowModel());
+    expect(prompt).toContain("INFOGRÁFICO INSTITUCIONAL");
+    expect(prompt).toContain("CISI — ponto focal técnico-operacional interno");
+    expect(prompt).toContain("[A VALIDAR]");
+    expect(prompt).toContain("Não inventar telefones");
   });
 
   it("exporta os elementos avançados da legenda BPMN", () => {

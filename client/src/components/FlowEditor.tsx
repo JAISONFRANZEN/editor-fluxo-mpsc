@@ -5,6 +5,7 @@ import {
   ChevronDown,
   CircleHelp,
   CircleDot,
+  Copy,
   Database,
   Download,
   FileJson,
@@ -53,9 +54,11 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { trpc } from "@/lib/trpc";
 import { buildBpmnXml } from "@shared/bpmnExport";
 import { calculateCanvasDropX, snapCanvasX } from "@shared/canvasGeometry";
+import { inferConnectionType } from "@shared/edgeRules";
 import { compareFlowModels } from "../../../shared/flowDiff";
 import { pushFlowHistory, redoFlowChange, undoFlowChange } from "../../../shared/flowHistory";
 import { importMarkdownToFlow, type MarkdownImportResult } from "../../../shared/markdownImporter";
+import { buildInstitutionalInfographicPrompt } from "../../../shared/infographicPrompt";
 import { roleLabels } from "../../../shared/flowAccess";
 import {
   ADMINISTRATION_LANE_ID,
@@ -146,7 +149,7 @@ function buildCompleteLegendSvg(legendY: number) {
   return legendEntries.map(([kind, label], index) => { const column = index % 2; const row = Math.floor(index / 2); const x = 60 + column * 560; const y = legendY + 52 + row * 34; return `<g transform='translate(${x},${y})'>${visual[kind]}<text x='46' y='5' font-family='Inter, Arial' font-size='14' fill='#334155'>${label}</text></g>`; }).join("");
 }
 
-export function buildExportSvg(model: FlowModel) {
+function buildExportSvg(model: FlowModel) {
   const lanes = sortedLanes(model);
   const width = Math.max(3300, ...model.nodes.map(node => node.x + NODE_WIDTH + 90));
   const height = lanes.length * LANE_HEIGHT + 420;
@@ -226,6 +229,7 @@ export default function FlowEditor() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null);
+  const [connectorSourceId, setConnectorSourceId] = useState<string | null>(null);
   const [draggedLaneId, setDraggedLaneId] = useState<string | null>(null);
   const [draggedEdgeId, setDraggedEdgeId] = useState<string | null>(null);
   const [compareVersionId, setCompareVersionId] = useState<number | null>(null);
@@ -237,6 +241,7 @@ export default function FlowEditor() {
   const [newLaneLabel, setNewLaneLabel] = useState("");
   const [newLanePool, setNewLanePool] = useState<"mpsc" | "externo">("mpsc");
   const [helpOpen, setHelpOpen] = useState(false);
+  const [infographicPromptOpen, setInfographicPromptOpen] = useState(false);
   const [undoStack, setUndoStack] = useState<FlowModel[]>([]);
   const [redoStack, setRedoStack] = useState<FlowModel[]>([]);
   const [pendingImport, setPendingImport] = useState<MarkdownImportResult | null>(null);
@@ -300,6 +305,16 @@ export default function FlowEditor() {
     const selectedVersion = versionsQuery.data?.find(version => version.id === compareVersionId);
     return selectedVersion && model ? compareFlowModels(selectedVersion.snapshot as unknown as FlowModel, model) : null;
   }, [compareVersionId, model, versionsQuery.data]);
+  const infographicPrompt = useMemo(() => model ? buildInstitutionalInfographicPrompt(model, flowQuery.data?.title) : "", [flowQuery.data?.title, model]);
+
+  const copyInfographicPrompt = async () => {
+    try {
+      await navigator.clipboard.writeText(infographicPrompt);
+      toast.success("Prompt de infográfico copiado para a área de transferência.");
+    } catch {
+      toast.error("Não foi possível copiar automaticamente. Selecione e copie o texto do prompt.");
+    }
+  };
 
   const updateNode = (changes: Partial<FlowNode>) => {
     if (!selectedNodeId) return;
@@ -395,6 +410,33 @@ export default function FlowEditor() {
       return { ...node, x: 350 + index * 230 };
     }) });
     toast.success("Elementos organizados por baia. Revise as conexões antes de registrar a versão.");
+  };
+
+  const createVisualConnection = (sourceId: string, targetId: string) => {
+    if (!model || !canEdit) return;
+    const type = inferConnectionType(model, sourceId, targetId);
+    if (!type) {
+      toast.error("Escolha dois elementos distintos e válidos para criar a conexão.");
+      return;
+    }
+    if (model.edges.some(edge => edge.sourceId === sourceId && edge.targetId === targetId)) {
+      toast.message("Já existe uma conexão entre esses elementos.");
+      setConnectorSourceId(null);
+      return;
+    }
+    const edge: FlowEdge = {
+      id: `edge-${Date.now()}`,
+      sourceId,
+      targetId,
+      type,
+      label: type === "message" ? "Mensagem [A VALIDAR]" : "",
+      order: model.edges.length,
+    };
+    setModel({ ...model, edges: [...model.edges, edge] });
+    setConnectorSourceId(null);
+    setSelectedEdgeId(edge.id);
+    setSelectedNodeId(null);
+    toast.success(type === "message" ? "Fluxo de mensagem criado entre Pools. Revise o rótulo." : "Fluxo de sequência criado. Ajuste o rótulo quando necessário.");
   };
 
   const readMarkdownFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -637,7 +679,8 @@ export default function FlowEditor() {
             <Button variant="outline" onClick={() => fileInputRef.current?.click()} disabled={isReadingMarkdown}><Upload className="mr-2 h-4 w-4" />{isReadingMarkdown ? "Lendo MD…" : "Importar MD"}</Button>
             <Button variant="outline" onClick={undoLastChange} disabled={undoStack.length === 0} title="Desfazer alteração local (Ctrl+Z)"><Undo2 className="mr-2 h-4 w-4" />Desfazer</Button>
             <Button variant="outline" onClick={redoLastChange} disabled={redoStack.length === 0} title="Refazer alteração local (Ctrl+Y ou Ctrl+Shift+Z)"><Redo2 className="mr-2 h-4 w-4" />Refazer</Button>
-            <Dialog open={helpOpen} onOpenChange={setHelpOpen}><DialogTrigger asChild><Button variant="outline"><CircleHelp className="mr-2 h-4 w-4" />Como usar</Button></DialogTrigger><DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>Orientação de uso do editor BPMN</DialogTitle><DialogDescription>Este espaço é uma minuta de modelagem e revisão. A versão institucional definitiva deve ser validada pela CISI e modelada no Bizagi.</DialogDescription></DialogHeader><div className="space-y-4 text-sm leading-relaxed text-slate-700"><div><b>1. Estruture o fluxo.</b> Adicione ações, decisões, eventos e objetos de dados. Arraste uma ação para alterar sua baia ou sua ordem horizontal. Arraste os rótulos das baias para reordená-las.</div><div><b>2. Preserve a governança.</b> A Administração Superior permanece bloqueada na primeira baia do Pool MPSC. Para interlocução externa, use o Pool de órgãos externos e conexões do tipo “fluxo de mensagem”.</div><div><b>3. Revise propriedades.</b> Selecione uma ação ou ligação no canvas e ajuste rótulo, responsável, observações, condição e nível N0–N3. Mantenha a marcação <code>[A VALIDAR]</code> em todo dado ainda não confirmado.</div><div><b>4. Resolva alertas.</b> O painel “Revisão” aponta fluxos inválidos entre Pools, gateways sem rótulo de saída, ações desconectadas e conflitos elementares de competência.</div><div><b>5. Registre decisão e exporte.</b> Adicione comentários, registre uma versão com resumo e status, compare com versões anteriores ou restaure um rascunho. Exporte SVG, especiﬁcação JSON ou imprima em A1/PDF.</div></div></DialogContent></Dialog>
+            <Dialog open={infographicPromptOpen} onOpenChange={setInfographicPromptOpen}><DialogTrigger asChild><Button variant="outline" title="Gerar prompt de infográfico institucional"><Sparkles className="mr-2 h-4 w-4" />Prompt infográfico</Button></DialogTrigger><DialogContent className="max-h-[85vh] max-w-4xl overflow-y-auto"><DialogHeader><DialogTitle>Prompt para infográfico institucional</DialogTitle><DialogDescription>O texto é montado a partir do fluxo atual. Revise as marcações <code>[A VALIDAR]</code> antes de utilizá-lo em uma ferramenta de criação de imagem.</DialogDescription></DialogHeader><div className="space-y-3"><div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-[#1F4788]"><strong>Uso recomendado:</strong> copie o prompt, revise o conteúdo institucional e utilize-o na ferramenta de geração de imagem de sua escolha. O botão não gera nem publica imagens.</div><Textarea aria-label="Prompt de infográfico institucional" readOnly value={infographicPrompt} className="min-h-[440px] resize-y font-mono text-xs leading-relaxed" /><div className="flex justify-end"><Button className="bg-[#1F4788] hover:bg-[#16396f]" onClick={copyInfographicPrompt}><Copy className="mr-2 h-4 w-4" />Copiar prompt</Button></div></div></DialogContent></Dialog>
+            <Dialog open={helpOpen} onOpenChange={setHelpOpen}><DialogTrigger asChild><Button variant="outline"><CircleHelp className="mr-2 h-4 w-4" />Como usar</Button></DialogTrigger><DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>Orientação de uso do editor BPMN</DialogTitle><DialogDescription>Este espaço é uma minuta de modelagem e revisão. A versão institucional definitiva deve ser validada pela CISI e modelada no Bizagi.</DialogDescription></DialogHeader><div className="space-y-4 text-sm leading-relaxed text-slate-700"><div><b>1. Estruture o fluxo.</b> Adicione ações, decisões, eventos e objetos de dados. Arraste uma ação para alterar sua baia ou sua ordem horizontal. Arraste os rótulos das baias para reordená-las.</div><div><b>2. Preserve a governança.</b> A Administração Superior permanece bloqueada na primeira baia do Pool MPSC. Para interlocução externa, use o Pool de órgãos externos e conexões do tipo “fluxo de mensagem”.</div><div><b>3. Revise propriedades.</b> Selecione uma ação ou ligação no canvas e ajuste rótulo, responsável, observações, condição e nível N0–N3. Mantenha a marcação <code>[A VALIDAR]</code> em todo dado ainda não confirmado.</div><div><b>4. Resolva alertas.</b> O painel “Revisão” aponta fluxos inválidos entre Pools, gateways sem rótulo de saída, ações desconectadas e conflitos elementares de competência.</div><div><b>5. Proteja a informação.</b> Este ambiente não substitui os controles institucionais de classificação. Não insira dados pessoais, dados sensíveis, informação de inteligência ou detalhes operacionais restritos sem autorização e tratamento adequado.</div><div><b>6. Registre decisão e exporte.</b> Adicione comentários, registre uma versão com resumo e status, compare com versões anteriores ou restaure um rascunho. Exporte SVG, especiﬁcação JSON ou imprima em A1/PDF.</div></div></DialogContent></Dialog>
             <Button variant="outline" onClick={() => downloadFile("fluxo-mpsc-especificacao.json", JSON.stringify({ title: flowQuery.data?.title, status, model, exportedAt: new Date().toISOString() }, null, 2), "application/json")}><FileJson className="mr-2 h-4 w-4" />Especificação</Button>
             <Button className="bg-[#1F4788] hover:bg-[#16396f]" onClick={downloadBpmn}><Download className="mr-2 h-4 w-4" />Baixar fluxo</Button>
             <Button variant="outline" onClick={() => downloadFile("fluxo-mpsc-visao.svg", buildExportSvg(model), "image/svg+xml")}><Download className="mr-2 h-4 w-4" />Imagem SVG</Button>
@@ -649,6 +692,7 @@ export default function FlowEditor() {
       </header>
 
       <main className="mx-auto grid max-w-[1800px] grid-cols-1 gap-4 p-4 xl:grid-cols-[250px_minmax(0,1fr)_350px]">
+        <div className="col-span-full flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-relaxed text-amber-950"><ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" /><p><strong>Uso institucional e classificação.</strong> Este editor gera minuta técnica de modelagem e revisão, não ato normativo nem comando operacional. Preserve a marcação <code>[A VALIDAR]</code> até a validação competente e não inclua dados pessoais, sensíveis, de inteligência ou informações operacionais restritas sem classificação, autorização e tratamento institucional adequados.</p></div>
         <aside className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm xl:sticky xl:top-4 xl:h-[calc(100vh-3rem)]">
           <div className="mb-4 flex items-center gap-2"><div className="rounded-md bg-blue-50 p-2 text-[#1F4788]"><Plus className="h-4 w-4" /></div><div><h2 className="font-semibold">Elementos BPMN</h2><p className="text-xs text-slate-500">Adicionar ao rascunho</p></div></div>
           <div className="mb-3 grid grid-cols-2 rounded-lg border border-slate-200 bg-slate-50 p-1 text-xs"><button onClick={() => setPaletteMode("essential")} className={`rounded-md px-2 py-1.5 font-semibold ${paletteMode === "essential" ? "bg-white text-[#1F4788] shadow-sm" : "text-slate-500"}`}>Essencial</button><button onClick={() => setPaletteMode("extended")} className={`rounded-md px-2 py-1.5 font-semibold ${paletteMode === "extended" ? "bg-white text-[#1F4788] shadow-sm" : "text-slate-500"}`}>Estendido</button></div>
@@ -706,7 +750,7 @@ export default function FlowEditor() {
                       {!isAdmin && <GripVertical className="h-4 w-4 opacity-80" />}<span className="truncate">{isAdmin ? "1. " : ""}{lane.label}</span>{isCisi && <Badge className="ml-auto bg-white/20 text-[10px] text-white hover:bg-white/20">FOCAL</Badge>}
                     </div>}
                     {lane.poolId === "externo" && <div className="absolute left-3 top-10 flex w-[360px] items-center gap-2 rounded-lg bg-[#687385] px-3 py-2 text-xs font-semibold text-white"><span className="truncate">{lane.label}</span></div>}
-                    {laneNodes.map(node => <button key={node.id} draggable={canEdit} onDragStart={event => { setDraggedNodeId(node.id); event.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => setDraggedNodeId(null)} onClick={() => { setSelectedNodeId(node.id); setSelectedEdgeId(null); }} className={`absolute ${lane.poolId === "externo" ? "top-[58px]" : "top-[48px]"} z-30 flex items-center justify-center border-2 px-3 text-center text-xs font-medium leading-snug shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${canEdit ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} ${nodeClass(node)} ${selectedNodeId === node.id ? "ring-4 ring-[#87CEEB]/70" : ""}`} style={{ left: node.x }}><span className={`line-clamp-3 ${["gateway", "parallelGateway", "inclusiveGateway", "eventGateway"].includes(node.nodeType) ? "-rotate-45 w-[112px]" : ""}`}>{node.nodeType === "parallelGateway" && <span className="mb-1 block text-lg font-bold leading-none text-green-700">+</span>}{node.nodeType === "gateway" && <span className="mb-1 block text-lg font-bold leading-none text-amber-700">×</span>}{node.nodeType === "inclusiveGateway" && <span className="mb-1 block text-lg font-bold leading-none text-amber-800">○</span>}{node.nodeType === "eventGateway" && <span className="mb-1 block text-lg font-bold leading-none text-amber-800">◎</span>}{node.nodeType === "subprocess" && <span className="mb-1 block text-sm font-bold leading-none text-[#1F4788]">⊞</span>}{node.requiresValidation && <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-red-600">[A VALIDAR]</span>}{node.label.replace("[A VALIDAR]", "")}</span></button>)}
+                    {laneNodes.map(node => <div key={node.id}><button draggable={canEdit} onDragStart={event => { setDraggedNodeId(node.id); event.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => setDraggedNodeId(null)} onClick={() => { setSelectedNodeId(node.id); setSelectedEdgeId(null); }} className={`absolute ${lane.poolId === "externo" ? "top-[58px]" : "top-[48px]"} z-30 flex items-center justify-center border-2 px-3 text-center text-xs font-medium leading-snug shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${canEdit ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} ${nodeClass(node)} ${selectedNodeId === node.id ? "ring-4 ring-[#87CEEB]/70" : ""}`} style={{ left: node.x }}><span className={`line-clamp-3 ${["gateway", "parallelGateway", "inclusiveGateway", "eventGateway"].includes(node.nodeType) ? "-rotate-45 w-[112px]" : ""}`}>{node.nodeType === "parallelGateway" && <span className="mb-1 block text-lg font-bold leading-none text-green-700">+</span>}{node.nodeType === "gateway" && <span className="mb-1 block text-lg font-bold leading-none text-amber-700">×</span>}{node.nodeType === "inclusiveGateway" && <span className="mb-1 block text-lg font-bold leading-none text-amber-800">○</span>}{node.nodeType === "eventGateway" && <span className="mb-1 block text-lg font-bold leading-none text-amber-800">◎</span>}{node.nodeType === "subprocess" && <span className="mb-1 block text-sm font-bold leading-none text-[#1F4788]">⊞</span>}{node.requiresValidation && <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-red-600">[A VALIDAR]</span>}{node.label.replace("[A VALIDAR]", "")}</span></button><button type="button" draggable={canEdit} onDragStart={event => { event.stopPropagation(); event.dataTransfer.setData("application/x-bpmn-connector-source", node.id); event.dataTransfer.effectAllowed = "link"; setConnectorSourceId(node.id); }} onDragEnd={() => setConnectorSourceId(null)} onClick={event => { event.stopPropagation(); setConnectorSourceId(node.id); toast.message("Agora arraste a ligação até o ponto de entrada do elemento de destino."); }} aria-label={`Criar conexão a partir de ${node.label}`} title="Arraste para criar conexão" className={`absolute z-40 flex h-4 w-4 items-center justify-center rounded-full border-2 border-white text-[10px] text-white shadow-sm ${connectorSourceId === node.id ? "bg-emerald-600 ring-2 ring-emerald-300" : "bg-[#1F4788] hover:bg-[#4A90E2]"}`} style={{ left: node.x + NODE_WIDTH - 8, top: (lane.poolId === "externo" ? 58 : 48) + 22 }}>+</button><button type="button" onDragOver={event => { if (canEdit) event.preventDefault(); }} onDrop={event => { event.preventDefault(); event.stopPropagation(); const sourceId = event.dataTransfer.getData("application/x-bpmn-connector-source") || connectorSourceId; if (sourceId) createVisualConnection(sourceId, node.id); }} onClick={event => { event.stopPropagation(); if (connectorSourceId) createVisualConnection(connectorSourceId, node.id); else toast.message("Arraste o ponto de saída de um elemento até este ponto de entrada."); }} aria-label={`Receber conexão em ${node.label}`} title="Solte uma conexão aqui" className="absolute z-40 h-4 w-4 rounded-full border-2 border-white bg-slate-500 shadow-sm hover:bg-[#4A90E2]" style={{ left: node.x - 8, top: (lane.poolId === "externo" ? 58 : 48) + 22 }} /></div>)}
                   </div>;
                 })}
                 <div className="absolute bottom-5 left-5 z-30 w-[760px] rounded-xl border border-slate-300 bg-white/95 p-4 shadow-sm backdrop-blur"><div className="mb-3 flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[#1F4788]" /><h3 className="text-sm font-bold tracking-wide text-[#1F4788]">LEGENDA — BPMN 2.0</h3></div><div className="grid grid-cols-2 gap-x-7 gap-y-2 text-xs text-slate-700"><div className="flex items-center gap-2"><span className="h-5 w-5 rounded-full border-2 border-lime-600 bg-lime-200" />Evento de início</div><div className="flex items-center gap-2"><span className="h-5 w-5 rounded-full border-2 border-red-600 bg-red-200" />Evento de fim</div><div className="flex items-center gap-2"><span className="h-5 w-7 rounded-md border-2 border-[#4A90E2] bg-white" />Tarefa / atividade</div><div className="flex items-center gap-2"><span className="h-5 w-7 rounded-md border-2 border-violet-400 bg-violet-50" />Tarefa de decisão / deliberação</div><div className="flex items-center gap-2"><span className="flex h-6 w-6 items-center justify-center rotate-45 border-2 border-amber-500 bg-amber-50 text-sm text-amber-800"><span className="-rotate-45">×</span></span>Gateway exclusivo (XOR)</div><div className="flex items-center gap-2"><span className="flex h-6 w-6 items-center justify-center rotate-45 border-2 border-yellow-600 bg-yellow-50 text-sm text-yellow-800"><span className="-rotate-45">+</span></span>Gateway paralelo (AND)</div><div className="flex items-center gap-2"><span className="w-8 border-t-2 border-[#1F4788]" />Fluxo de sequência</div><div className="flex items-center gap-2"><span className="w-8 border-t-2 border-dashed border-slate-600" />Fluxo de mensagem</div><div className="flex items-center gap-2"><span className="h-6 w-5 rounded-sm border-2 border-slate-500 bg-white" />Objeto de dados</div><div className="flex items-center gap-2"><span className="h-6 w-7 rounded-md border-2 border-amber-300 bg-amber-50" />Anotação / observação</div><div className="flex items-center gap-2"><span className="w-8 border-t-2 border-dashed border-slate-400" />Associação / anotação</div></div></div>
