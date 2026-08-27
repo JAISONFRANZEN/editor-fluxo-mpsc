@@ -63,3 +63,5 @@
 - [x] Enriquecer a auditoria de restauração com versões de origem, restaurada e nova versão criada.
 - [x] Revisar acessibilidade dos controles principais e documentar os atalhos de teclado disponíveis.
 - [x] Impedir sobrescrita concorrente de versões do mesmo fluxo com verificação otimista do número atual.
+- [ ] Configurar o subdomínio amigável fluxoeditor-mpsc.manus.space para a versão publicada do editor.
+- [x] Criar página web de guia rápido para orientar a equipe sobre acesso, login e uso inicial do domínio personalizado do editor BPMN.
