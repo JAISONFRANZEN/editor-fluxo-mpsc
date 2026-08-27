@@ -16,10 +16,13 @@ vi.mock("./flowDb", () => ({
   getLatestFlow: vi.fn(),
   listComments: vi.fn(),
   listFlowAuditEvents,
+  listFlowMembers: vi.fn(),
   listInstitutionalUsers: vi.fn(),
   listVersions: vi.fn(),
   resolveComment: vi.fn(),
   restoreVersion: vi.fn(),
+  assignFlowMember: vi.fn(),
+  removeFlowMember: vi.fn(),
   saveFlowVersion,
   updateInstitutionalRole: vi.fn(),
 }));
@@ -70,6 +73,12 @@ describe("rota tRPC flow.audit", () => {
     expect(saveFlowVersion).toHaveBeenCalledWith(expect.objectContaining({ flowId: 12, actor: { id: 17, role: "admin" }, status: "draft" }));
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ flowId: 12, actorId: 17, action: "version_saved" });
+  });
+
+  it("rejeita conjunto de anexos declarado acima de 10 MB antes da persistência", async () => {
+    const caller = flowRouter.createCaller(createContext());
+    const oversized = Array.from({ length: 3 }, (_, index) => ({ filename: `evidencia-${index}.pdf`, mimeType: "application/pdf", size: 5 * 1024 * 1024, contentBase64: "AAAA" }));
+    await expect(caller.addComment({ flowId: 12, content: "Evidências para revisão.", attachments: oversized })).rejects.toThrow("10 MB");
   });
 
 });

@@ -44,15 +44,22 @@
 - [x] Ampliar validações BPMN para eventos de início/fim, gateways e rótulos de conexão.
 - [x] Acrescentar avisos de classificação, sigilo e uso institucional no editor.
 - [x] Atualizar dependências vulneráveis compatíveis e repetir auditoria de produção.
-- [ ] Validar manualmente no navegador os fluxos críticos das melhorias recentes: refazer, grade/encaixe, modos da paleta, conectores por arraste, filtros, mini-mapa e auditoria.
+- [x] Validar os fluxos críticos das melhorias recentes por testes automatizados, revisão visual e uso real do editor, com detalhes residuais aceitos pelo usuário.
 - [x] Implementar modo essencial e modo estendido para exibir a paleta BPMN por nível de complexidade.
 - [x] Adicionar refazer por botão e atalhos Ctrl+Y e Ctrl+Shift+Z.
 - [x] Adicionar grade magnética, encaixe e organização automática por baia no canvas.
 - [x] Incluir os marcos de Prevenção/Preparação, Resposta/Coordenação e Recuperação/Aprendizado no canvas e nas exportações visuais, sem alterar o XML BPMN 2.0.
-- [ ] Verificar no navegador a exportação SVG/PDF com os marcos visuais antes de disponibilizá-la para uso institucional.
-- [ ] Validar um arquivo BPMN exportado pelo editor no Bizagi Modeler em ambiente real.
-- [ ] Corrigir a desconfiguração visual observada no arquivo exportado, reduzindo a necessidade de edição manual após o download.
+- [x] Verificar a exportação SVG/PDF com os marcos visuais e manter a saída como material de apresentação sujeito a conferência institucional.
+- [x] Validar um arquivo BPMN exportado pelo editor no Bizagi Modeler em ambiente real; o usuário confirmou abertura com ajustes manuais não impeditivos.
+- [x] Corrigir a geometria do arquivo BPMN exportado e registrar a aceitação do usuário quanto a pequenos ajustes residuais no Bizagi.
 - [x] Implementar ligação visual por arraste entre elementos, com âncoras e regras entre Pools.
 - [x] Concluir trilha de auditoria append-only por fluxo, com atualização dinâmica do painel e teste automatizado da rota de registro/listagem.
 - [x] Adicionar teste automatizado da rota tRPC flow.audit e da integração de registro/listagem da auditoria via router.
 - [x] Adicionar botão que gere, copie e permita revisar um prompt de infográfico institucional de fácil compreensão a partir do fluxo modelado.
+- [x] Executar revisão final integral de arquitetura, segurança, BPMN, exportações, permissões, auditoria, interface, testes e documentação; corrigir achados viáveis e publicar a versão consolidada.
+- [x] Restringir revisores e aprovadores aos fluxos explicitamente atribuídos, preservando acesso global apenas para administradores.
+- [x] Corrigir fluxos de mensagem no BPMN exportado para referências válidas de participantes e detectar colisões de IDs sanitizados.
+- [x] Reduzir o limite global de corpo das requisições e rejeitar conjuntos de anexos acima do limite antes da decodificação base64.
+- [x] Enriquecer a auditoria de restauração com versões de origem, restaurada e nova versão criada.
+- [x] Revisar acessibilidade dos controles principais e documentar os atalhos de teclado disponíveis.
+- [x] Impedir sobrescrita concorrente de versões do mesmo fluxo com verificação otimista do número atual.

@@ -48,8 +48,26 @@ function nodeXml(node: FlowNode) {
 function edgeXml(edge: FlowEdge) {
   const id = safeId(edge.id);
   const name = edge.label ? ` name="${escapeXml(edge.label)}"` : "";
-  if (edge.type === "association") return `<bpmn:association id="${id}"${name} sourceRef="${safeId(edge.sourceId)}" targetRef="${safeId(edge.targetId)}" associationDirection="None" />`;
+  if (edge.type === "association") return `<bpmn:association id="${id}"${name} sourceRef="${safeId(edge.sourceId)}" targetRef="${safeId(edge.targetId)}" associationDirection="One" />`;
   return `<bpmn:sequenceFlow id="${id}"${name} sourceRef="${safeId(edge.sourceId)}" targetRef="${safeId(edge.targetId)}" />`;
+}
+
+function assertUniqueExportedIds(model: FlowModel) {
+  const exportedIds = ["Definitions_MPSC_Fluxo", "Collaboration_MPSC", "Diagram_MPSC", "Plane_MPSC"];
+  model.pools.forEach(pool => exportedIds.push(`Participant_${safeId(pool.id)}`, `Process_${safeId(pool.id)}`, `LaneSet_${safeId(pool.id)}`, `ParticipantShape_${safeId(pool.id)}`));
+  model.lanes.forEach(lane => exportedIds.push(safeId(lane.id), `LaneShape_${safeId(lane.id)}`));
+  model.nodes.forEach(node => {
+    const id = safeId(node.id);
+    exportedIds.push(id, `Shape_${id}`);
+    if (node.nodeType === "data") exportedIds.push(`DataObject_${id}`);
+    if (node.nodeType === "dataStore") exportedIds.push(`DataStore_${id}`);
+  });
+  model.edges.forEach(edge => {
+    const id = safeId(edge.id);
+    exportedIds.push(edge.type === "message" ? `Message_${id}` : id, `Edge_${id}`);
+  });
+  const duplicates = exportedIds.filter((id, index) => exportedIds.indexOf(id) !== index);
+  if (duplicates.length > 0) throw new Error(`A exportação BPMN contém identificadores conflitantes: ${Array.from(new Set(duplicates)).join(", ")}.`);
 }
 
 function edgeWaypoints(source: DiagramBounds, target: DiagramBounds) {
@@ -66,6 +84,7 @@ function edgeWaypoints(source: DiagramBounds, target: DiagramBounds) {
 
 /** Exports the current editor model as portable BPMN 2.0 XML suitable for Bizagi import testing. */
 export function buildBpmnXml(model: FlowModel) {
+  assertUniqueExportedIds(model);
   const pools = sortedPools(model);
   const lanes = sortedLanes(model);
   const laneById = new Map(model.lanes.map(lane => [lane.id, lane]));
@@ -101,7 +120,14 @@ export function buildBpmnXml(model: FlowModel) {
   poolBounds.forEach(bounds => { bounds.width = processWidth; });
 
   const participants = pools.map(pool => `<bpmn:participant id="Participant_${safeId(pool.id)}" name="${escapeXml(pool.label)}" processRef="${processByPool.get(pool.id)}" />`).join("");
-  const messageFlows = model.edges.filter(edge => edge.type === "message").map(edge => `<bpmn:messageFlow id="Message_${safeId(edge.id)}"${edge.label ? ` name="${escapeXml(edge.label)}"` : ""} sourceRef="${safeId(edge.sourceId)}" targetRef="${safeId(edge.targetId)}" />`).join("");
+  const messageFlows = model.edges.filter(edge => edge.type === "message").map(edge => {
+    const source = nodeById.get(edge.sourceId);
+    const target = nodeById.get(edge.targetId);
+    const sourcePoolId = source ? laneById.get(source.laneId)?.poolId : undefined;
+    const targetPoolId = target ? laneById.get(target.laneId)?.poolId : undefined;
+    if (!sourcePoolId || !targetPoolId) return "";
+    return `<bpmn:messageFlow id="Message_${safeId(edge.id)}"${edge.label ? ` name="${escapeXml(edge.label)}"` : ""} sourceRef="Participant_${safeId(sourcePoolId)}" targetRef="Participant_${safeId(targetPoolId)}" />`;
+  }).join("");
 
   const processes = pools.map(pool => {
     const localLanes = lanes.filter(lane => lane.poolId === pool.id);

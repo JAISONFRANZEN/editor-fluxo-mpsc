@@ -132,6 +132,22 @@ describe("regras de validação do fluxo BPMN", () => {
     expect(model.pools.map(pool => pool.id)).toEqual(originalPoolOrder);
   });
 
+  it("exporta fluxo de mensagem entre participantes e associação com direção aberta", () => {
+    const model = createDefaultFlowModel();
+    const mpscLaneIds = new Set(model.lanes.filter(lane => lane.poolId === "mpsc").map(lane => lane.id));
+    const [source, target] = model.nodes.filter(node => mpscLaneIds.has(node.laneId));
+    model.edges.push({ id: "associacao-teste", sourceId: source.id, targetId: target.id, type: "association", label: "Referência" });
+    const xml = buildBpmnXml(model);
+    expect(xml).toMatch(/<bpmn:messageFlow[^>]+sourceRef="Participant_mpsc"[^>]+targetRef="Participant_externo"/);
+    expect(xml).toContain('associationDirection="One"');
+  });
+
+  it("interrompe a exportação quando IDs de categorias diferentes colidem", () => {
+    const model = createDefaultFlowModel();
+    model.edges.push({ id: "inicio", sourceId: "inicio", targetId: "seguranca", type: "sequence", label: "" });
+    expect(() => buildBpmnXml(model)).toThrow("identificadores conflitantes");
+  });
+
   it("gera prompt de infográfico claro e preserva os avisos institucionais pendentes", () => {
     const prompt = buildInstitutionalInfographicPrompt(createDefaultFlowModel());
     expect(prompt).toContain("INFOGRÁFICO INSTITUCIONAL");

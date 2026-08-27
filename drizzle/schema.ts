@@ -79,8 +79,17 @@ export const flowAuditEvents = mysqlTable("flowAuditEvents", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
+export const flowMembers = mysqlTable("flowMembers", {
+  id: int("id").autoincrement().primaryKey(),
+  flowId: int("flowId").notNull().references(() => protocolFlows.id),
+  userId: int("userId").notNull().references(() => users.id),
+  assignedBy: int("assignedBy").notNull().references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [uniqueIndex("flow_members_flow_user_idx").on(table.flowId, table.userId)]);
+
 export type ProtocolFlow = typeof protocolFlows.$inferSelect;
 export type FlowVersion = typeof flowVersions.$inferSelect;
 export type FlowComment = typeof flowComments.$inferSelect;
 export type FlowCommentAttachment = typeof flowCommentAttachments.$inferSelect;
 export type FlowAuditEvent = typeof flowAuditEvents.$inferSelect;
+export type FlowMember = typeof flowMembers.$inferSelect;

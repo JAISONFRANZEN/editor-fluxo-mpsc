@@ -1,5 +1,5 @@
-import { and, count, desc, eq, inArray } from "drizzle-orm";
-import { flowAuditEvents, flowCommentAttachments, flowComments, flowVersions, protocolFlows, users } from "../drizzle/schema";
+import { and, count, desc, eq, inArray, or } from "drizzle-orm";
+import { flowAuditEvents, flowCommentAttachments, flowComments, flowMembers, flowVersions, protocolFlows, users } from "../drizzle/schema";
 import type { FlowModel } from "../shared/flowModel";
 import { canSaveStatus, rolePermissions, type FlowStatus, type InstitutionalRole } from "../shared/flowAccess";
 import { getDb } from "./db";
@@ -9,10 +9,10 @@ import { MAX_COMMENT_ATTACHMENT_BYTES, MAX_COMMENT_ATTACHMENT_TOTAL_BYTES, sanit
 export type { FlowStatus } from "../shared/flowAccess";
 export type FlowActor = { id: number; role: InstitutionalRole };
 export type CommentAttachmentInput = { filename: string; mimeType: string; size: number; contentBase64: string };
-export type FlowAuditAction = "flow_created" | "version_saved" | "version_restored" | "comment_added" | "comment_resolved";
+export type FlowAuditAction = "flow_created" | "version_saved" | "version_restored" | "comment_added" | "comment_resolved" | "member_assigned" | "member_removed";
 
 function canAccessAll(actor: FlowActor) {
-  return actor.role === "admin" || actor.role === "revisor" || actor.role === "aprovador";
+  return actor.role === "admin";
 }
 
 function requirePermission(actor: FlowActor, permission: "comment" | "edit" | "approve" | "manageUsers") {
@@ -29,19 +29,59 @@ export async function getLatestFlow(actor: FlowActor) {
   const db = await getDb();
   if (!db) return undefined;
   const query = db.select().from(protocolFlows);
-  const result = canAccessAll(actor)
-    ? await query.orderBy(desc(protocolFlows.updatedAt)).limit(1)
-    : await query.where(eq(protocolFlows.ownerId, actor.id)).orderBy(desc(protocolFlows.updatedAt)).limit(1);
+  if (canAccessAll(actor)) return (await query.orderBy(desc(protocolFlows.updatedAt)).limit(1))[0];
+  const memberships = await db.select({ flowId: flowMembers.flowId }).from(flowMembers).where(eq(flowMembers.userId, actor.id));
+  const assignedIds = memberships.map(item => item.flowId);
+  const accessFilter = assignedIds.length > 0 ? or(eq(protocolFlows.ownerId, actor.id), inArray(protocolFlows.id, assignedIds)) : eq(protocolFlows.ownerId, actor.id);
+  const result = await query.where(accessFilter).orderBy(desc(protocolFlows.updatedAt)).limit(1);
   return result[0];
 }
 
 export async function getAccessibleFlow(flowId: number, actor: FlowActor) {
   const db = await getDb();
   if (!db) return undefined;
-  const result = canAccessAll(actor)
-    ? await db.select().from(protocolFlows).where(eq(protocolFlows.id, flowId)).limit(1)
-    : await db.select().from(protocolFlows).where(and(eq(protocolFlows.id, flowId), eq(protocolFlows.ownerId, actor.id))).limit(1);
-  return result[0];
+  if (canAccessAll(actor)) return (await db.select().from(protocolFlows).where(eq(protocolFlows.id, flowId)).limit(1))[0];
+  const owned = await db.select().from(protocolFlows).where(and(eq(protocolFlows.id, flowId), eq(protocolFlows.ownerId, actor.id))).limit(1);
+  if (owned[0]) return owned[0];
+  const membership = await db.select({ id: flowMembers.id }).from(flowMembers).where(and(eq(flowMembers.flowId, flowId), eq(flowMembers.userId, actor.id))).limit(1);
+  if (!membership[0]) return undefined;
+  return (await db.select().from(protocolFlows).where(eq(protocolFlows.id, flowId)).limit(1))[0];
+}
+
+export async function listFlowMembers(flowId: number, actor: FlowActor) {
+  const db = await getDb();
+  if (!db) return [];
+  requirePermission(actor, "manageUsers");
+  const flow = await getAccessibleFlow(flowId, actor);
+  if (!flow) throw new Error("Fluxo não encontrado.");
+  return db.select({ id: flowMembers.id, userId: flowMembers.userId, name: users.name, email: users.email, role: users.role, createdAt: flowMembers.createdAt })
+    .from(flowMembers).innerJoin(users, eq(flowMembers.userId, users.id)).where(eq(flowMembers.flowId, flowId)).orderBy(users.name);
+}
+
+export async function assignFlowMember(flowId: number, userId: number, actor: FlowActor) {
+  const db = await getDb();
+  if (!db) throw new Error("Banco de dados indisponível.");
+  requirePermission(actor, "manageUsers");
+  const flow = await getAccessibleFlow(flowId, actor);
+  if (!flow) throw new Error("Fluxo não encontrado.");
+  const target = await db.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
+  if (!target[0]) throw new Error("Usuário institucional não encontrado.");
+  if (flow.ownerId === userId) throw new Error("O proprietário já possui acesso integral ao fluxo.");
+  await db.insert(flowMembers).values({ flowId, userId, assignedBy: actor.id }).onDuplicateKeyUpdate({ set: { assignedBy: actor.id } });
+  await appendFlowAudit(flowId, actor.id, "member_assigned", { userId });
+  return listFlowMembers(flowId, actor);
+}
+
+export async function removeFlowMember(flowId: number, userId: number, actor: FlowActor) {
+  const db = await getDb();
+  if (!db) throw new Error("Banco de dados indisponível.");
+  requirePermission(actor, "manageUsers");
+  const flow = await getAccessibleFlow(flowId, actor);
+  if (!flow) throw new Error("Fluxo não encontrado.");
+  if (flow.ownerId === userId) throw new Error("Não é permitido remover o proprietário do fluxo.");
+  await db.delete(flowMembers).where(and(eq(flowMembers.flowId, flowId), eq(flowMembers.userId, userId)));
+  await appendFlowAudit(flowId, actor.id, "member_removed", { userId });
+  return listFlowMembers(flowId, actor);
 }
 
 export async function createFlow(ownerId: number, title: string, model: FlowModel) {
@@ -63,7 +103,9 @@ export async function saveFlowVersion(input: { flowId: number; actor: FlowActor;
   const current = await getAccessibleFlow(input.flowId, input.actor);
   if (!current) throw new Error("Fluxo não encontrado.");
   const nextVersion = current.currentVersion + 1;
-  await db.update(protocolFlows).set({ modelJson: input.model, status: input.status, currentVersion: nextVersion, updatedAt: new Date() }).where(eq(protocolFlows.id, input.flowId));
+  const updateResult = await db.update(protocolFlows).set({ modelJson: input.model, status: input.status, currentVersion: nextVersion, updatedAt: new Date() }).where(and(eq(protocolFlows.id, input.flowId), eq(protocolFlows.currentVersion, current.currentVersion)));
+  const affectedRows = Array.isArray(updateResult) ? Number((updateResult[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 1) : 1;
+  if (affectedRows === 0) throw new Error("O fluxo recebeu outra atualização. Recarregue a versão mais recente antes de registrar suas alterações.");
   await db.insert(flowVersions).values({ flowId: input.flowId, versionNumber: nextVersion, status: input.status, changeSummary: input.summary || "Atualização do fluxo.", snapshot: input.model, authorId: input.actor.id });
   await appendFlowAudit(input.flowId, input.actor.id, "version_saved", { version: nextVersion, status: input.status, summary: (input.summary || "Atualização do fluxo.").slice(0, 500) });
   return getAccessibleFlow(input.flowId, input.actor);
@@ -94,8 +136,9 @@ export async function restoreVersion(flowId: number, versionId: number, actor: F
   const found = await db.select().from(flowVersions).where(and(eq(flowVersions.id, versionId), eq(flowVersions.flowId, flowId))).limit(1);
   const version = found[0];
   if (!version) throw new Error("Versão não encontrada.");
+  const priorVersion = flow.currentVersion;
   const restored = await saveFlowVersion({ flowId, actor, model: version.snapshot as FlowModel, status: "draft", summary: `Restauração da versão ${version.versionNumber}.` });
-  await appendFlowAudit(flowId, actor.id, "version_restored", { restoredVersion: version.versionNumber });
+  await appendFlowAudit(flowId, actor.id, "version_restored", { fromVersion: priorVersion, restoredVersion: version.versionNumber, newVersion: priorVersion + 1 });
   return restored;
 }
 
