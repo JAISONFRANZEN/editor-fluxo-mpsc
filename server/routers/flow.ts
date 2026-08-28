@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createDefaultFlowModel, validateFlowModel, type FlowModel } from "../../shared/flowModel";
+import { createBlankFlowModel, createDefaultFlowModel, validateFlowModel, type FlowModel } from "../../shared/flowModel";
 import { addComment, assignFlowMember, createFlow, getAccessibleFlow, getLatestFlow, listComments, listFlowAuditEvents, listFlowMembers, listInstitutionalUsers, listVersions, removeFlowMember, resolveComment, restoreVersion, saveFlowVersion, updateInstitutionalRole, type FlowActor, type FlowStatus } from "../flowDb";
 import { rolePermissions, type InstitutionalRole } from "../../shared/flowAccess";
 import { protectedProcedure, router } from "../_core/trpc";
@@ -44,6 +44,12 @@ export const flowRouter = router({
     const existing = await getLatestFlow(actor);
     const flow = existing ?? await createFlow(ctx.user.id, "Fluxo Básico de Acionamento — Nível Promotoria", createDefaultFlowModel());
     return flow ? { ...flow, access: { role: actor.role, permissions: rolePermissions[actor.role] } } : flow;
+  }),
+  create: protectedProcedure.input(z.object({ title: z.string().trim().min(3).max(255) })).mutation(async ({ ctx, input }) => {
+    const flow = await createFlow(ctx.user.id, input.title, createBlankFlowModel());
+    if (!flow) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o novo fluxo." });
+    const actor = actorFrom(ctx.user);
+    return { ...flow, access: { role: actor.role, permissions: rolePermissions[actor.role] } };
   }),
   save: protectedProcedure.input(z.object({ flowId: z.number().int().positive(), model: flowModelSchema, status: statusSchema, summary: z.string().max(1000) })).mutation(async ({ ctx, input }) => {
     const issues = validateFlowModel(input.model as FlowModel);

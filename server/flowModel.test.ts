@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { ADMINISTRATION_LANE_ID, createDefaultFlowModel, validateFlowModel } from "../shared/flowModel";
+import { ADMINISTRATION_LANE_ID, createBlankFlowModel, createDefaultFlowModel, validateFlowModel } from "../shared/flowModel";
 import { compareFlowModels } from "../shared/flowDiff";
 import { buildBpmnXml } from "../shared/bpmnExport";
 import { calculateCanvasDropX, snapCanvasX } from "../shared/canvasGeometry";
@@ -17,6 +17,16 @@ describe("regras de validação do fluxo BPMN", () => {
     const issues = validateFlowModel(createDefaultFlowModel());
     expect(issues.filter(issue => issue.severity === "error")).toHaveLength(0);
     expect(createDefaultFlowModel().lanes[0]?.id).toBe(ADMINISTRATION_LANE_ID);
+  });
+
+  it("cria fluxo em branco com Administração Superior protegida na primeira baia", () => {
+    const model = createBlankFlowModel();
+    const mpscLanes = model.lanes.filter(lane => lane.poolId === "mpsc").sort((a, b) => a.order - b.order);
+
+    expect(model.nodes).toEqual([]);
+    expect(model.edges).toEqual([]);
+    expect(mpscLanes[0]).toMatchObject({ id: ADMINISTRATION_LANE_ID, locked: true });
+    expect(validateFlowModel(model).filter(issue => issue.severity === "error")).toEqual([]);
   });
 
   it("impede fluxo de sequência entre Pools distintos", () => {

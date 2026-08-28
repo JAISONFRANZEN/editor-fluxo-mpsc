@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TrpcContext } from "./_core/context";
-import { createDefaultFlowModel } from "../shared/flowModel";
+import { createBlankFlowModel, createDefaultFlowModel } from "../shared/flowModel";
 
 const auditState = vi.hoisted(() => ({ events: [] as Array<Record<string, unknown>> }));
 const listFlowAuditEvents = vi.hoisted(() => vi.fn(async () => auditState.events));
@@ -8,10 +8,11 @@ const saveFlowVersion = vi.hoisted(() => vi.fn(async (input: { flowId: number; a
   auditState.events.push({ id: auditState.events.length + 1, flowId: input.flowId, actorId: input.actor.id, action: "version_saved", context: { status: input.status, summary: input.summary }, createdAt: new Date("2026-08-27T17:00:00Z") });
   return { id: input.flowId, modelJson: input.model };
 }));
+const createFlow = vi.hoisted(() => vi.fn(async (ownerId: number, title: string, model: unknown) => ({ id: 33, ownerId, title, status: "draft", currentVersion: 1, modelJson: model })));
 
 vi.mock("./flowDb", () => ({
   addComment: vi.fn(),
-  createFlow: vi.fn(),
+  createFlow,
   getAccessibleFlow: vi.fn(),
   getLatestFlow: vi.fn(),
   listComments: vi.fn(),
@@ -52,6 +53,7 @@ describe("rota tRPC flow.audit", () => {
     auditState.events.length = 0;
     listFlowAuditEvents.mockClear();
     saveFlowVersion.mockClear();
+    createFlow.mockClear();
   });
 
   it("lista os eventos de auditoria do fluxo usando o ator autenticado", async () => {
@@ -79,6 +81,15 @@ describe("rota tRPC flow.audit", () => {
     const caller = flowRouter.createCaller(createContext());
     const oversized = Array.from({ length: 3 }, (_, index) => ({ filename: `evidencia-${index}.pdf`, mimeType: "application/pdf", size: 5 * 1024 * 1024, contentBase64: "AAAA" }));
     await expect(caller.addComment({ flowId: 12, content: "Evidências para revisão.", attachments: oversized })).rejects.toThrow("10 MB");
+  });
+
+  it("cria outro fluxo em branco sem reutilizar o modelo em edição", async () => {
+    const caller = flowRouter.createCaller(createContext());
+    const created = await caller.create({ title: "Plano de contingência local" });
+
+    expect(createFlow).toHaveBeenCalledWith(17, "Plano de contingência local", createBlankFlowModel());
+    expect(created).toMatchObject({ id: 33, title: "Plano de contingência local", status: "draft" });
+    expect((created.modelJson as ReturnType<typeof createBlankFlowModel>).nodes).toEqual([]);
   });
 
 });

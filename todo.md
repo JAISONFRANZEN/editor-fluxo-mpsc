@@ -65,3 +65,4 @@
 - [x] Impedir sobrescrita concorrente de versões do mesmo fluxo com verificação otimista do número atual.
 - [ ] Configurar o subdomínio amigável fluxoeditor-mpsc.manus.space para a versão publicada do editor.
 - [x] Criar página web de guia rápido para orientar a equipe sobre acesso, login e uso inicial do domínio personalizado do editor BPMN.
+- [x] Adicionar botão Novo fluxo que crie um projeto BPMN em branco, preserve a Administração Superior na primeira baia e não sobrescreva o fluxo atual sem confirmação.

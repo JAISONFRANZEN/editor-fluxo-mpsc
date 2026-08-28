@@ -267,6 +267,8 @@ export default function FlowEditor() {
   const [newLanePool, setNewLanePool] = useState<"mpsc" | "externo">("mpsc");
   const [helpOpen, setHelpOpen] = useState(false);
   const [infographicPromptOpen, setInfographicPromptOpen] = useState(false);
+  const [newFlowOpen, setNewFlowOpen] = useState(false);
+  const [newFlowTitle, setNewFlowTitle] = useState("Novo fluxo BPMN — MPSC");
   const [undoStack, setUndoStack] = useState<FlowModel[]>([]);
   const [redoStack, setRedoStack] = useState<FlowModel[]>([]);
   const [pendingImport, setPendingImport] = useState<MarkdownImportResult | null>(null);
@@ -283,10 +285,12 @@ export default function FlowEditor() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const commentAttachmentInputRef = useRef<HTMLInputElement>(null);
   const priorModelRef = useRef<FlowModel | null>(null);
+  const loadedFlowIdRef = useRef<number | null>(null);
   const skipUndoRecordRef = useRef(false);
   const utils = trpc.useUtils();
   const flowId = flowQuery.data?.id;
   const saveMutation = trpc.flow.save.useMutation();
+  const createFlowMutation = trpc.flow.create.useMutation();
   const restoreMutation = trpc.flow.restore.useMutation();
   const addCommentMutation = trpc.flow.addComment.useMutation();
   const resolveCommentMutation = trpc.flow.resolveComment.useMutation();
@@ -297,9 +301,15 @@ export default function FlowEditor() {
   const updateUserRoleMutation = trpc.flow.updateUserRole.useMutation();
 
   useEffect(() => {
-    if (flowQuery.data?.modelJson && !model) {
+    if (flowQuery.data?.modelJson && (loadedFlowIdRef.current !== flowQuery.data.id || !model)) {
+      skipUndoRecordRef.current = true;
       setModel(flowQuery.data.modelJson as unknown as FlowModel);
       setStatus(flowQuery.data.status);
+      setUndoStack([]);
+      setRedoStack([]);
+      setSelectedNodeId(null);
+      setSelectedEdgeId(null);
+      loadedFlowIdRef.current = flowQuery.data.id;
     }
   }, [flowQuery.data, model]);
 
@@ -513,6 +523,33 @@ export default function FlowEditor() {
     toast.success("Visão inicial criada a partir do Markdown. Revise e registre uma nova versão quando estiver pronta.");
   };
 
+  const createNewFlow = () => {
+    const title = newFlowTitle.trim();
+    if (title.length < 3) {
+      toast.error("Informe um título com pelo menos 3 caracteres.");
+      return;
+    }
+    createFlowMutation.mutate({ title }, {
+      onSuccess: created => {
+        skipUndoRecordRef.current = true;
+        setModel(created.modelJson as unknown as FlowModel);
+        setStatus(created.status);
+        setUndoStack([]);
+        setRedoStack([]);
+        setSelectedNodeId(null);
+        setSelectedEdgeId(null);
+        loadedFlowIdRef.current = created.id;
+        setNewFlowOpen(false);
+        utils.flow.getOrCreate.invalidate();
+        utils.flow.versions.invalidate();
+        utils.flow.comments.invalidate();
+        utils.flow.audit.invalidate();
+        toast.success("Novo fluxo em branco criado. O fluxo anterior foi preservado no histórico.");
+      },
+      onError: error => toast.error(error.message),
+    });
+  };
+
   useEffect(() => {
     const handleKeyboardUndo = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -723,6 +760,7 @@ export default function FlowEditor() {
             {access && <Badge variant="outline" className="border-slate-300 bg-white text-slate-700"><UserRoundCog className="mr-1 h-3.5 w-3.5" />{roleLabels[access.role]}</Badge>}
             {hasUnregisteredChanges && <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-900">Alterações não registradas</Badge>}
             {canManageUsers && flowId && <FlowAccessManager flowId={flowId} ownerId={flowQuery.data?.ownerId ?? -1} />}
+            <Dialog open={newFlowOpen} onOpenChange={setNewFlowOpen}><DialogTrigger asChild><Button variant="outline" title="Criar outro fluxo BPMN em branco"><Plus className="mr-2 h-4 w-4" />Novo fluxo</Button></DialogTrigger><DialogContent className="max-w-lg"><DialogHeader><DialogTitle>Iniciar novo fluxo</DialogTitle><DialogDescription>Será criado um projeto BPMN em branco com Pools e baias institucionais iniciais. O fluxo atual e suas versões não serão alterados.</DialogDescription></DialogHeader><div className="space-y-4"><div className="space-y-2"><Label htmlFor="new-flow-title">Título do fluxo</Label><Input id="new-flow-title" value={newFlowTitle} onChange={event => setNewFlowTitle(event.target.value)} maxLength={255} autoFocus /></div><div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-relaxed text-amber-950"><strong>Regra preservada:</strong> Administração Superior permanecerá como primeira baia do Pool MPSC. Inclua ações, responsabilidades e campos <code>[A VALIDAR]</code> conforme a revisão institucional.</div><div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setNewFlowOpen(false)}>Cancelar</Button><Button className="bg-[#1F4788] hover:bg-[#16396f]" onClick={createNewFlow} disabled={createFlowMutation.isPending}>{createFlowMutation.isPending ? "Criando…" : "Criar fluxo em branco"}</Button></div></div></DialogContent></Dialog>
             <input ref={fileInputRef} type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" className="hidden" onChange={readMarkdownFile} />
             <Button variant="outline" onClick={() => fileInputRef.current?.click()} disabled={isReadingMarkdown}><Upload className="mr-2 h-4 w-4" />{isReadingMarkdown ? "Lendo MD…" : "Importar MD"}</Button>
             <Button variant="outline" onClick={undoLastChange} disabled={undoStack.length === 0} title="Desfazer alteração local (Ctrl+Z)"><Undo2 className="mr-2 h-4 w-4" />Desfazer</Button>

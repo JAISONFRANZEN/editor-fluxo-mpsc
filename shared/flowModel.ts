@@ -68,6 +68,26 @@ export type FlowIssue = {
 
 export const ADMINISTRATION_LANE_ID = "mpsc-admin-superior";
 
+export function createBlankFlowModel(): FlowModel {
+  return {
+    pools: [
+      { id: "mpsc", label: "MPSC — Governança e Resposta Institucional", order: 0 },
+      { id: "externo", label: "Órgãos externos de resposta", order: 1 },
+    ],
+    lanes: [
+      { id: ADMINISTRATION_LANE_ID, poolId: "mpsc", label: "Administração Superior", order: 0, locked: true },
+      { id: "mpsc-promotor", poolId: "mpsc", label: "Promotoria de Justiça — atuação natural", order: 1 },
+      { id: "mpsc-cisi", poolId: "mpsc", label: "CISI — ponto focal institucional", order: 2 },
+      { id: "externo-resposta", poolId: "externo", label: "Órgãos externos de resposta", order: 0 },
+    ],
+    nodes: [],
+    edges: [],
+    sourceTitle: "Novo fluxo BPMN — MPSC",
+    importWarnings: ["Estrutura inicial em branco. Preencha responsabilidades, critérios e contatos institucionais e mantenha [A VALIDAR] onde ainda não houver confirmação formal."],
+    milestones: [],
+  };
+}
+
 export function createDefaultFlowModel(): FlowModel {
   return {
     pools: [
